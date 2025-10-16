@@ -1,0 +1,348 @@
+#!/usr/bin/env python
+
+"""zform automatically identifies and optionally applies
+the best parametric transformation
+that linearizes the relationship between variables.
+
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
+"""
+try:
+    import warnings
+    from itertools import permutations
+    from collections import defaultdict
+    import numpy as np
+    import pandas as pd
+    from scipy.optimize import curve_fit, OptimizeWarning  # type: ignore[import-untyped]
+    from typing import Tuple
+    from concurrent.futures import ProcessPoolExecutor, as_completed  # <-- added
+except ImportError as e:
+    raise ImportError(
+        f"Missing dependency: {e.name}. Please install all requirements via "
+        "'pip install -r requirements.txt'"
+    )
+
+
+# === Transformation functions ===
+def linear_func(x, a, b):
+    """Linear transformation: a*x + b"""
+    return a * x + b
+
+
+def log_func(x, a, b, base=np.e):
+    """Fixed-base logarithmic transformation: a * log_base(x + 1) + b"""
+    return a * np.emath.logn(base, x + 1) + b
+
+
+def log_func_dynamic(x, a, b, base):
+    """Dynamic logarithmic transformation: a * log_base(x + 1) + b,
+    base is fitted."""
+    base = np.abs(base) + 1e-5  # ensure positive base
+    return a * (np.log(x + 1) / np.log(base)) + b
+
+
+def power_func(x, a, b):
+    """Power transformation: a * x^b"""
+    return a * (x ** b)
+
+
+def logistic_func(x, L, k, x0):
+    """Logistic transformation"""
+    return L / (1 + np.exp(-k * (x - x0)))
+
+
+# === Metrics ===
+def compute_metric(name: str, y_true, y_pred, k: int = 0):
+    """Compute R2, RMSE, MAE, AIC, or BIC."""
+    y_true = np.asarray(y_true, float)
+    y_pred = np.asarray(y_pred, float)
+    n = y_true.size
+    if n == 0 or np.any(~np.isfinite(y_pred)):
+        return np.nan
+
+    resid = y_true - y_pred
+    rss = np.sum(resid ** 2)
+    name = name.lower()
+
+    if name == "r2":
+        tss = np.sum((y_true - np.mean(y_true)) ** 2)
+        return 1 - (rss / tss) if tss != 0 else np.nan
+    elif name == "rmse":
+        return np.sqrt(rss / n)
+    elif name == "mae":
+        return np.mean(np.abs(resid))
+    elif name == "aic":
+        return n * np.log(rss / n) + 2 * k if rss > 0 else -np.inf
+    elif name == "bic":
+        return n * np.log(rss / n) + k * np.log(n) if rss > 0 else -np.inf
+    else:
+        warnings.warn(
+            f"Unknown eval_metric '{name}', falling back to R².", UserWarning)
+        tss = np.sum((y_true - np.mean(y_true)) ** 2)
+        return 1 - (rss / tss) if tss != 0 else np.nan
+
+
+# === Core fitting routine ===
+def compute_best_model(x, y, eval_metric="r2", transformations=None, mode="discovery"):
+    """Fit multiple functional forms using curve_fit
+    and return the best one."""
+
+    # --- Dynamic initial guesses ---
+    def guess_initial_params(x, y, model_name):
+        x_mean, x_std = np.mean(x), np.std(x)
+        y_mean, y_std = np.mean(y), np.std(y)
+        x_std = x_std or 1.0
+        y_std = y_std or 1.0
+
+        if model_name == "linear":
+            a0 = y_std / x_std
+            b0 = y_mean - a0 * x_mean
+            p = [a0, b0]
+
+        elif model_name in ("log", "log_dynamic"):
+            logx_std = np.std(np.log(np.abs(x) + 1)) or 1.0
+            a0 = y_std / logx_std
+            b0 = y_mean
+            p = [a0, b0, np.e] if model_name == "log_dynamic" else [a0, b0]
+
+        elif model_name == "power":
+            b0 = 1.0
+            a0 = y_mean / (x_mean if x_mean != 0 else 1.0)
+            p = [a0, b0]
+
+        elif model_name == "logistic":
+            L0 = float(np.max(y))
+            k0 = 1.0 / (x_std or 1.0)
+            x0 = float(np.median(x))
+            p = [L0, k0, x0]
+
+        else:
+            raise ValueError(f"Unknown model '{model_name}'")
+
+        return np.clip(p, -1e6, 1e6).tolist()
+
+    # --- Available transformations ---
+    TRANSFORMATIONS = {
+        "linear": linear_func,
+        "power": power_func,
+        "logistic": logistic_func,
+    }
+    if mode == "discovery":
+        TRANSFORMATIONS["log_dynamic"] = log_func_dynamic
+    else:
+        TRANSFORMATIONS["log"] = log_func
+
+    # --- Sanitize inputs ---
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    if len(x) < 3 or np.std(x) == 0 or np.std(y) == 0:
+        return "N/A", np.nan, None, None
+
+    results = {}
+    bounds = (-1e8, 1e8)
+
+    for name, func in TRANSFORMATIONS.items():
+        if "log" in name and np.any(x <= -1):
+            continue
+        if name == "power" and np.any(x < 0):
+            continue
+
+        p0 = guess_initial_params(x, y, name)
+        success = False
+        for attempt in range(2):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    warnings.simplefilter("ignore", category=OptimizeWarning)
+                    popt: np.ndarray
+                    _: np.ndarray
+                    popt, _ = curve_fit(
+                        func, x, y,
+                        p0=np.array(p0) * (
+                            1 + np.random.uniform(-0.1, 0.1, len(p0))
+                        ) if attempt == 1 else p0,
+                        bounds=bounds,
+                        maxfev=80000,
+                        method="trf",
+                    )
+
+                y_pred = func(x, *popt)
+                score = compute_metric(eval_metric, y, y_pred, k=len(popt))
+                results[name] = {"score": score, "params": popt}
+                success = True
+                break
+            except Exception:
+                continue
+        if not success:
+            results[name] = {"score": np.nan, "params": None}
+
+    valid = {k: v for k, v in results.items() if np.isfinite(v["score"])}
+    if not valid:
+        return "N/A", np.nan, None, None
+
+    best = max(valid, key=lambda k: valid[k]["score"])
+    return best, round(valid[best]["score"], 3), valid[best]["params"], None
+
+
+def _fit_pair(args):  # <-- added
+    group_name, gdf, y_var, x_var, eval_metric, transformations, mode, min_obs = args
+    x = gdf[x_var]
+    y = gdf[y_var]
+    valid = x.notna() & y.notna() & np.isfinite(x) & np.isfinite(y)
+    x_clean = x[valid].to_numpy()
+    y_clean = y[valid].to_numpy()
+    if len(x_clean) < min_obs:
+        return (group_name, y_var, x_var, "N/A", np.nan, None)
+    model, score, params, _ = compute_best_model(
+        x_clean, y_clean, eval_metric, transformations, mode)
+    return (group_name, y_var, x_var, model, score, params)
+
+
+# === High-level interface ===
+def zform(
+    df,
+    variables=None,
+    group_col=None,
+    eval_metric="r2",
+    transformations=None,
+    min_obs=10,
+    apply=False,
+    naming="standard",
+    export_csv=None,
+    export_csv_index=False,
+    return_results=False,
+    mode="discovery",
+    n_jobs=1,
+):
+    """Compute and optionally apply the best-fitting transformation
+    between variable pairs."""
+    if variables is None:
+        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        skipped = [c for c in df.columns if c not in numeric_vars]
+        variables = numeric_vars
+        if skipped:
+            warnings.warn(
+                f"Ignored {len(skipped)} non-numeric columns: "
+                f"{', '.join(skipped[:5])}" + ("..." if len(skipped) > 5 else ""),
+                UserWarning,
+                stacklevel=2,
+            )
+    if not variables:
+        raise ValueError("No numeric variables found.")
+
+    groups = [("All Data", df)] if group_col is None else df.groupby(group_col)
+    results = defaultdict(dict)
+
+    def _func_from_name(name):
+        return {
+            "log_dynamic": log_func_dynamic,
+            "log": log_func,
+            "power": power_func,
+            "logistic": logistic_func,
+        }.get(name, linear_func)
+
+    print("\n Computing optimal forms... \n")
+    # --- Loop ---
+    jobs = [
+        (group_name, gdf, y_var, x_var, eval_metric, transformations, mode, min_obs)
+        for group_name, gdf in groups
+        for y_var, x_var in permutations(variables, 2)
+    ]
+
+    if n_jobs != 1:  # <-- added
+        with ProcessPoolExecutor(max_workers=None if n_jobs == -1 else n_jobs) as ex:
+            futures = [ex.submit(_fit_pair, j) for j in jobs]
+            results_list = [f.result() for f in as_completed(futures)]
+    else:
+        results_list = [_fit_pair(j) for j in jobs]
+
+    for group_name, y_var, x_var, model, score, params in results_list:
+        results[(y_var, x_var)][f"{group_name} - best model"] = model
+        results[(y_var, x_var)][f"{group_name} - best {eval_metric.upper()}"] = score
+        results[(y_var, x_var)][f"{group_name} - params"] = (
+            ", ".join(f"{p:.5g}" for p in params) if params is not None else None
+        )
+
+        if apply and model != "N/A" and params is not None:
+            func = _func_from_name(model)
+            col = f"{y_var}_z_{model}" if naming == "standard" else y_var
+            try:
+                df.loc[:, col] = func(df[x_var], *params)
+            except (ValueError, TypeError, RuntimeError) as e:
+                warnings.warn(f"Failed applying {model} to "
+                              "{y_var} ~ {x_var}: {e}", UserWarning)
+
+    # --- Build results summary ---
+    records = []
+    for (y_var, x_var), result_dict in results.items():
+        for key, model_name in result_dict.items():
+            if "best model" not in key:
+                continue
+
+            group_name = key.split(" - ")[0]
+            metric_key = f"{group_name} - best {eval_metric.upper()}"
+            params_key = f"{group_name} - params"
+
+            records.append({
+                "y": y_var,
+                "x": x_var,
+                "Group": None if group_name == "All Data" else group_name,
+                "Best Model": model_name,
+                f"Best {eval_metric.upper()}": result_dict.get(metric_key, np.nan),
+                "Parameters": result_dict.get(params_key, None),
+            })
+
+
+    results_df = (
+        pd.DataFrame.from_records(records)
+        .reset_index(drop=True)
+        if records else
+        pd.DataFrame(columns=[
+            "Variable Pair",
+            "Group",
+            "Best Model",
+            f"Best {eval_metric.upper()}",
+            "Parameters"])
+    )
+
+    if len(results_df["Group"].dropna().unique()) <= 1:
+        results_df = results_df.drop(columns=["Group"], errors="ignore")
+
+    if export_csv:
+        results_df.to_csv(export_csv, index=export_csv_index)
+
+    return (df, results_df) if return_results else df
+
+def try_zform_penguins():
+    import seaborn as sbn
+    while True:
+        which_data = input("Would you like to run the small (insert 1) or big (insert 2) dataset? ")
+        if which_data == "1":
+            df = sbn.load_dataset("penguins").dropna()
+            break
+        if which_data == "2":
+            df = sbn.load_dataset("penguins").dropna()
+            df = pd.concat([df] * 1000, ignore_index=True)
+            break
+        else:
+            print("Only input 1 for the small dataset, or 2 for the big one.")
+    df_out, forms = zform(df, group_col='species', return_results=True, export_csv='./forms.csv', n_jobs=-1)
+    print(forms.query('y == "bill_length_mm" and x == "body_mass_g"'))
+
+# --- Quick test (penguins) ---
+if __name__ == "__main__":
+    while True:
+        run_test_input = input("Would you like to run the penguins test? (y/n)")
+        if run_test_input.lower()[0] == "y":
+            try_zform_penguins()
+            break
+        if run_test_input.lower()[0] == "n":
+            print("Not running the test.")
+            break
+        else:
+            print("Please input y or n")
