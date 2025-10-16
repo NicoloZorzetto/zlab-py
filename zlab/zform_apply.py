@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 """
 zform_apply applies previously computed transformations from zform
 to a DataFrame, using stored parameters.
@@ -98,26 +97,56 @@ def zform_apply(
     if not required_cols.issubset(forms.columns):
         raise ValueError(f"Forms DataFrame must contain columns: {required_cols}")
 
-    # Normalize y/x input
+        # --- Normalize y/x input ---
     if isinstance(y, str):
         y = [y]
     if isinstance(x, str):
         x = [x]
 
-    # Warn if applying all pairs
-    if y is None or x is None:
+    # --- Determine which y/x pairs exist in forms ---
+    available_y = forms["y"].unique().tolist()
+    available_x = forms["x"].unique().tolist()
+
+    # --- Filter user-specified y/x to only those present in forms ---
+    def _filter_valid(vars_list, available, name):
+        if vars_list is None:
+            return None
+        missing = [v for v in vars_list if v not in available]
+        if missing:
+            warnings.warn(
+                f"⚠️ Skipping {name} not found in forms: {', '.join(missing)}",
+                UserWarning,
+                stacklevel=2,
+            )
+        kept = [v for v in vars_list if v in available]
+        if not kept:
+            raise ValueError(f"No valid {name} remain after filtering (none found in forms).")
+        return kept
+
+    y = _filter_valid(y, available_y, "y")
+    x = _filter_valid(x, available_x, "x")
+
+    # --- Determine subset of forms to apply ---
+    if y is None and x is None:
         warnings.warn(
-            "⚠️  Neither y nor x specified — applying ALL pairwise transformations.\n"
+            "Neither y nor x specified — applying ALL pairwise transformations.\n"
             "This may create a column for every y~x combination found in 'forms', "
             "potentially squaring your dataset's width.",
             UserWarning,
         )
         subset = forms.copy()
+    elif y is not None and x is None:
+        subset = forms.query("y in @y")
+    elif y is None and x is not None:
+        subset = forms.query("x in @x")
     else:
         subset = forms.query("y in @y and x in @x")
 
     if subset.empty:
-        raise ValueError("No matching transformations found for given y/x pairs.")
+        raise ValueError(
+            "No matching transformations found for the given y/x pairs in forms. "
+            "Ensure they were fitted by zform()."
+        )
 
     # === Handle grouping ===
     if group_col is not None and "Group" in forms.columns:

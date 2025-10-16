@@ -184,7 +184,8 @@ def _fit_pair(args):
 # === High-level interface ===
 def zform(
     df,
-    variables=None,
+    y=None,
+    x=None,
     group_col=None,
     eval_metric="r2",
     transformations=None,
@@ -196,32 +197,73 @@ def zform(
     return_results=False,
     mode="discovery",
     n_jobs=1,
+    verbose=True,
 ):
-    """Compute and optionally apply the best-fitting transformation between variable pairs."""
-    if variables is None:
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
-        skipped = [c for c in df.columns if c not in numeric_vars]
-        variables = numeric_vars
-        if skipped:
+    """
+    Compute and optionally apply the best-fitting transformation between variable pairs.
+
+    """
+
+   # --- Normalize y/x input ---
+    if isinstance(y, str):
+        y = [y]
+    if isinstance(x, str):
+        x = [x]
+
+    # --- Select numeric variables ---
+    numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+    if not numeric_vars:
+        raise ValueError("No numeric variables found in DataFrame.")
+
+    # --- Filter user-specified y/x to numeric only ---
+    def _filter_numeric(vars_list, name):
+        if vars_list is None:
+            return None
+        non_numeric = [v for v in vars_list if v not in numeric_vars]
+        if non_numeric:
             warnings.warn(
-                f"Ignored {len(skipped)} non-numeric columns: "
-                f"{', '.join(skipped[:5])}" + ("..." if len(skipped) > 5 else ""),
-                UserWarning, stacklevel=2,
+                f"⚠️ Skipping non-numeric {name} columns: {', '.join(non_numeric)}",
+                UserWarning,
+                stacklevel=2,
             )
-    if not variables:
-        raise ValueError("No numeric variables found.")
+        kept = [v for v in vars_list if v in numeric_vars]
+        if not kept:
+            raise ValueError(f"No numeric {name} columns remain after filtering.")
+        return kept
+
+    y = _filter_numeric(y, "y")
+    x = _filter_numeric(x, "x")
+
+    # --- Determine which variables to use ---
+    if y is None and x is None:
+        y_vars = x_vars = numeric_vars
+        if verbose:
+            warnings.warn("Neither y nor x specified — applying ALL pairwise combinations.", UserWarning)
+    elif y is not None and x is None:
+        y_vars = y
+        x_vars = [c for c in numeric_vars if c not in y]
+    elif y is None and x is not None:
+        x_vars = x
+        y_vars = [c for c in numeric_vars if c not in x]
+    else:
+        y_vars, x_vars = y, x
+
 
     groups = [("All Data", df)] if group_col is None else df.groupby(group_col)
     results = defaultdict(dict)
 
-    print("\n Computing optimal forms... \n")
+    if verbose:
+        print(f"\n🔍 Computing optimal forms for {len(y_vars)} Y × {len(x_vars)} X combinations...\n")
+
     jobs = [
         (group_name, gdf, y_var, x_var, eval_metric, transformations, mode, min_obs)
         for group_name, gdf in groups
-        for y_var, x_var in permutations(variables, 2)
+        for y_var in y_vars
+        for x_var in x_vars
+        if y_var != x_var
     ]
 
-    # Parallel processing
+        # === Parallel or serial processing ===
     if n_jobs != 1:
         with ProcessPoolExecutor(max_workers=None if n_jobs == -1 else n_jobs) as ex:
             futures = [ex.submit(_fit_pair, j) for j in jobs]
@@ -229,7 +271,7 @@ def zform(
     else:
         results_list = [_fit_pair(j) for j in jobs]
 
-    # Store results into results dict (this was missing!)
+    # === Store results into results dict ===
     for group_name, y_var, x_var, model, score, params in results_list:
         results[(y_var, x_var)][f"{group_name} - best model"] = model
         results[(y_var, x_var)][f"{group_name} - best {eval_metric.upper()}"] = score
@@ -237,7 +279,7 @@ def zform(
             ", ".join(f"{p:.5g}" for p in params) if params is not None else None
         )
 
-    # Build summary DataFrame
+    # === Build summary DataFrame ===
     records = []
     for (y_var, x_var), result_dict in results.items():
         for key, model_name in result_dict.items():
@@ -259,14 +301,18 @@ def zform(
     if len(results_df.get("Group", pd.Series()).dropna().unique()) <= 1:
         results_df = results_df.drop(columns=["Group"], errors="ignore")
 
+    # === Optionally apply transformations ===
     if apply:
         try:
             from .zform_apply import zform_apply
         except ImportError:
             from zform_apply import zform_apply
-        df = zform_apply(df, results_df, naming="standard" if naming == "standard" else naming)
 
+        df = zform_apply(df, results_df, naming=naming)
+
+    # === Optional CSV export ===
     if export_csv:
         results_df.to_csv(export_csv, index=export_csv_index)
 
+    # === Return ===
     return (df, results_df) if return_results else df
