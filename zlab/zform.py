@@ -65,6 +65,10 @@ def compute_metric(name: str, y_true, y_pred, k: int = 0):
     if name == "r2":
         tss = np.sum((y_true - np.mean(y_true)) ** 2)
         return 1 - (rss / tss) if tss != 0 else np.nan
+    elif name == "adjr2":
+        tss = np.sum((y_true - np.mean(y_true)) ** 2)
+        r2 = 1 - (rss / tss) if tss != 0 else np.nan
+        return 1 - (1 - r2) * (n - 1) / (n - k - 1) if n > k + 1 else np.nan
     elif name == "rmse":
         return np.sqrt(rss / n)
     elif name == "mae":
@@ -217,7 +221,7 @@ def zform(
         Independent variable(s). If None, all numeric columns not in y are considered.
     group_col : str | list[str] | None, optional
         Column(s) defining grouping structure. If provided, models are fitted within each group.
-    eval_metric : {'r2', 'rmse', 'mae', 'aic', 'bic'}, default='r2'
+    eval_metric : {'r2', 'adjr2', 'rmse', 'mae', 'aic', 'bic'}, default='r2'
         Evaluation metric used to select the best-fitting transformation.
     transformations : list[str] | None, optional
         List of transformations to test. If None, uses ['linear', 'power', 'logistic', 'log_dynamic']
