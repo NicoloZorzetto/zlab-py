@@ -24,10 +24,9 @@ try:
     import pandas as pd
     from scipy.optimize import curve_fit, OptimizeWarning  # type: ignore[import-untyped]
 except ImportError as e:
-    raise ImportError(
-        f"Missing dependency: {e.name}. Please install all requirements via "
-        "'pip install -r requirements.txt'"
-    )
+    msg = (f"Missing dependency: {e.name}. Please install all requirements via "
+        "'pip install -r requirements.txt'")
+    raise ImportError(msg)
 
 
 def linear_func(x, a, b):
@@ -78,7 +77,8 @@ def compute_metric(name: str, y_true, y_pred, k: int = 0):
     elif name == "bic":
         return n * np.log(rss / n) + k * np.log(n) if rss > 0 else -np.inf
     else:
-        warnings.warn(f"Unknown eval_metric '{name}', falling back to R².", UserWarning)
+        msg = f"Unknown eval_metric '{name}', falling back to R²."
+        warnings.warn(msg, UserWarning, stacklevel=2)
         tss = np.sum((y_true - np.mean(y_true)) ** 2)
         return 1 - (rss / tss) if tss != 0 else np.nan
 
@@ -109,7 +109,8 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, mode="disco
             x0 = float(np.median(x))
             p = [L0, k0, x0]
         else:
-            raise ValueError(f"Unknown model '{model_name}'")
+            msg = (f"Unknown model '{model_name}'")
+            raise ValueError(msg)
 
         return np.clip(p, -1e6, 1e6).tolist()
 
@@ -287,10 +288,8 @@ def zform(
                 return None
             non_numeric = [v for v in vars_list if v not in numeric_vars]
             if non_numeric and verbose and not silence_warnings:
-                warnings.warn(
-                    f"Skipping non-numeric {name} columns: {', '.join(non_numeric)}",
-                    UserWarning, stacklevel=2,
-                )
+                msg = f"Skipping non-numeric {name} columns: {', '.join(non_numeric)}"
+                warnings.warn(msg, UserWarning, stacklevel=2)
             kept = [v for v in vars_list if v in numeric_vars]
             if not kept:
                 raise ValueError(f"No numeric {name} columns remain after filtering.")
@@ -302,7 +301,8 @@ def zform(
         if y is None and x is None:
             y_vars = x_vars = numeric_vars
             if verbose and not silence_warnings:
-                warnings.warn("Neither y nor x specified — applying ALL pairwise combinations.", UserWarning)
+                msg = "Neither y nor x specified — applying ALL pairwise combinations."
+                warnings.warn(msg, UserWarning, stacklevel=2)
         elif y is not None and x is None:
             y_vars = y
             x_vars = [c for c in numeric_vars if c not in y]
@@ -314,6 +314,11 @@ def zform(
 
         groups = [("All Data", df)] if group_col is None else df.groupby(group_col)
         results = defaultdict(dict)
+
+        if export_csv:
+            if not export_csv.endswith('.csv') and not silence_warnings:
+                msg = "The results csv export filename does not end with csv."
+                warnings.warn(msg, UserWarning, stacklevel=2)
 
         if verbose:
             print(f"\nComputing optimal forms for {len(y_vars)} Y × {len(x_vars)} X combinations...\n")
