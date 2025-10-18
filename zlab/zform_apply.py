@@ -19,6 +19,8 @@ except ImportError as e:
         "'pip install -r requirements.txt'")
     raise ImportError(msg)
 
+from zlab.warnings import ZformApplyWarning
+
 try:
     from .zform import (
         linear_func,
@@ -41,7 +43,7 @@ def _func_from_name(name):
         "logistic": logistic_func,
         "log": log_func,
         "log_dynamic": log_func_dynamic,
-    }.get(name, linear_func)
+    }.get(name.lower(), linear_func)
 
 
 def zform_apply(
@@ -106,11 +108,11 @@ def zform_apply(
             missing = [v for v in vars_list if v not in available]
             if missing and not silence_warnings:
                 msg = (f"Skipping {name} not found in forms: {', '.join(missing)}")
-                warnings.warn(msg, UserWarning, stacklevel=2)
+                ZformApplyWarning(msg)
             kept = [v for v in vars_list if v in available]
             if not kept:
-                msg = (f"No valid {name}")
-                " remain after filtering (none found in forms)."
+                msg = (f"No valid {name} "
+                       "remain after filtering (none found in forms).")
                 raise ValueError(msg)
             return kept
 
@@ -123,7 +125,7 @@ def zform_apply(
                        "applying ALL pairwise transformations.\n"
                        "This may create a column for every y~x combination "
                        "found in 'forms'.")
-                warnings.warn(msg, UserWarning, stacklevel=2)
+                ZformApplyWarning(msg)
             subset = forms.copy()
         elif y is not None and x is None:
             subset = forms.query("y in @y")
@@ -162,7 +164,7 @@ def zform_apply(
                     if xv not in df.columns or yv not in df.columns:
                         if not silence_warnings:
                             msg = (f"Skipping ({yv}, {xv}) — missing column in df.")
-                            warnings.warn(msg, UserWarning, stacklevel=2)
+                            ZformApplyWarning(msg)
                         continue
 
                     try:
@@ -183,8 +185,8 @@ def zform_apply(
                     except Exception as e:
                         if not silence_warnings:
                             msg = (f"Failed applying {model} to {xv} "
-                                   "~ {yv} (group={group_name}): {e}",)
-                            warnings.warn(msg, UserWarning, stacklevel=2)
+                                   "~ {yv} (group={group_name}): {e}")
+                            ZformApplyWarning(msg)
 
             df.drop(columns="_zgroup", inplace=True)
 
@@ -200,7 +202,7 @@ def zform_apply(
                     if not silence_warnings:
                         msg = (f"Skipping ({yv}, {xv}) — "
                                "missing column in df.")
-                        warnings.warn(msg, UserWarning, stacklevel=2)
+                        ZformApplyWarning(msg)
                     continue
 
                 try:
@@ -218,13 +220,14 @@ def zform_apply(
                                "or 'minimal'.")
                         raise ValueError(msg)
                     if naming == "minimal" and col_name in df.columns and not silence_warnings:
-                        msg = (f"Overwriting {col_name} (multiple y for same x).")
-                        warnings.warn(msg, UserWarning, stacklevel=2)
+                        msg = (f"Overwriting existing column '{col_name}' "
+                               "(multiple y for same x).")
+                        ZformApplyWarning(msg)
                     df[col_name] = func(df[xv].to_numpy(), *params)
                 except Exception as e:
                     if not silence_warnings:
                         msg = (f"Failed applying {model} to {xv} ~ {yv}: {e}")
-                        warnings.warn(msg, UserWarning, stacklevel=2)
+                        ZformApplyWarning(msg)
 
         return df
 
