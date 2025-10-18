@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 zform_apply applies previously computed transformations from zform
 to a DataFrame, using stored parameters.

@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 zform automatically identifies and optionally applies
 the best parametric transformation
