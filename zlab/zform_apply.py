@@ -1,5 +1,5 @@
 """
-zform_apply applies previously computed transformations from zform
+zform_apply applies previously computed zforms transformations
 to a DataFrame, using stored parameters.
 
 This module is part of the zlab library by Nicolò Zorzetto.
@@ -15,7 +15,7 @@ try:
     import pandas as pd
 except ImportError as e:
     msg = (f"Missing dependency: {e.name}. Please install all requirements via "
-        "'pip install -r requirements.txt'")
+           "'pip install -r requirements.txt'")
     raise ImportError(msg)
 
 from zlab.warnings import ZformApplyWarning
@@ -30,8 +30,8 @@ try:
     )
 except ImportError as e:
     msg = (f"Could not import {e.name}. "
-        "Ensure the zlab package is intact and that you are running "
-        "your script from the project root if using a prototype version.")
+           "Ensure the zlab package is intact and that you are running "
+           "your script from the project root if using a prototype version.")
     raise ImportError(msg)
 
 
@@ -47,7 +47,7 @@ def _func_from_name(name):
 
 def zform_apply(
     df,
-    forms,
+    zforms,
     y=None,
     x=None,
     group_col=None,
@@ -63,17 +63,18 @@ def zform_apply(
     ----------
     df : pandas.DataFrame
         Original data to transform.
-    forms : pandas.DataFrame
+    zforms : pandas.DataFrame
         Output of zform() or a CSV with the same structure.
         Must include ['y', 'x', 'Best Model', 'Parameters'].
     y : str | list[str] | None
-        Dependent variable(s). If None, applies to all y in forms.
+        Dependent variable(s). If None, applies to all y in zforms.
     x : str | list[str] | None
-        Independent variable(s). If None, applies to all x in forms.
+        Independent variable(s). If None, applies to all x in zforms.
     group_col : None | str | list[str], optional
         Column(s) defining groups used during zform fitting.
         If provided, zform_apply will apply group-specific transformations.
     naming : {'standard', 'compact', 'minimal'}, default='standard'
+        Naming convention for transformed columns.
     verbose : bool, default=True
         Whether to print progress and summary messages.
     silence_warnings : bool, default=False
@@ -89,8 +90,8 @@ def zform_apply(
 
     try:
         required_cols = {"y", "x", "Best Model", "Parameters"}
-        if not required_cols.issubset(forms.columns):
-            msg = (f"Forms DataFrame must contain columns: {required_cols}")
+        if not required_cols.issubset(zforms.columns):
+            msg = (f"zforms DataFrame must contain columns: {required_cols}")
             raise ValueError(msg)
 
         if isinstance(y, str):
@@ -98,20 +99,20 @@ def zform_apply(
         if isinstance(x, str):
             x = [x]
 
-        available_y = forms["y"].unique().tolist()
-        available_x = forms["x"].unique().tolist()
+        available_y = zforms["y"].unique().tolist()
+        available_x = zforms["x"].unique().tolist()
 
         def _filter_valid(vars_list, available, name):
             if vars_list is None:
                 return None
             missing = [v for v in vars_list if v not in available]
             if missing and not silence_warnings:
-                msg = (f"Skipping {name} not found in forms: {', '.join(missing)}")
+                msg = (f"Skipping {name} not found in zforms: {', '.join(missing)}")
                 ZformApplyWarning(msg)
             kept = [v for v in vars_list if v in available]
             if not kept:
-                msg = (f"No valid {name} "
-                       "remain after filtering (none found in forms).")
+                msg = (f"No valid {name} remain after filtering "
+                       "(none found in zforms).")
                 raise ValueError(msg)
             return kept
 
@@ -123,22 +124,22 @@ def zform_apply(
                 msg = ("Neither y nor x specified — "
                        "applying ALL pairwise transformations.\n"
                        "This may create a column for every y~x combination "
-                       "found in 'forms'.")
+                       "found in 'zforms'.")
                 ZformApplyWarning(msg)
-            subset = forms.copy()
+            subset = zforms.copy()
         elif y is not None and x is None:
-            subset = forms.query("y in @y")
+            subset = zforms.query("y in @y")
         elif y is None and x is not None:
-            subset = forms.query("x in @x")
+            subset = zforms.query("x in @x")
         else:
-            subset = forms.query("y in @y and x in @x")
+            subset = zforms.query("y in @y and x in @x")
 
         if subset.empty:
             msg = ("No matching transformations found for the given "
-                   "y/x pairs in forms. Ensure they were fitted by zform().")
+                   "y/x pairs in zforms. Ensure they were fitted by zform().")
             raise ValueError(msg)
 
-        if group_col is not None and "Group" in forms.columns:
+        if group_col is not None and "Group" in zforms.columns:
             if isinstance(group_col, str):
                 df["_zgroup"] = df[group_col].astype(str)
             elif isinstance(group_col, list):
@@ -152,11 +153,11 @@ def zform_apply(
                 print(f"Applying group-specific transformations for {len(groups)} groups...")
 
             for group_name, gdf in df.groupby("_zgroup"):
-                subforms = subset.query("Group == @group_name or Group.isnull()")
-                if subforms.empty:
+                sub_zforms = subset.query("Group == @group_name or Group.isnull()")
+                if sub_zforms.empty:
                     continue
 
-                for _, row in subforms.iterrows():
+                for _, row in sub_zforms.iterrows():
                     yv, xv, model, params_str = row["y"], row["x"], row["Best Model"], row["Parameters"]
                     if model == "N/A" or not isinstance(params_str, str):
                         continue
@@ -184,7 +185,7 @@ def zform_apply(
                     except Exception as e:
                         if not silence_warnings:
                             msg = (f"Failed applying {model} to {xv} "
-                                   "~ {yv} (group={group_name}): {e}")
+                                   f"~ {yv} (group={group_name}): {e}")
                             ZformApplyWarning(msg)
 
             df.drop(columns="_zgroup", inplace=True)
@@ -199,8 +200,7 @@ def zform_apply(
                     continue
                 if xv not in df.columns or yv not in df.columns:
                     if not silence_warnings:
-                        msg = (f"Skipping ({yv}, {xv}) — "
-                               "missing column in df.")
+                        msg = (f"Skipping ({yv}, {xv}) — missing column in df.")
                         ZformApplyWarning(msg)
                     continue
 
@@ -215,8 +215,7 @@ def zform_apply(
                         col_name = f"{xv}_z_{model}"
                     else:
                         msg = ("Invalid naming mode. "
-                               "Use 'standard', 'compact', "
-                               "or 'minimal'.")
+                               "Use 'standard', 'compact', or 'minimal'.")
                         raise ValueError(msg)
                     if naming == "minimal" and col_name in df.columns and not silence_warnings:
                         msg = (f"Overwriting existing column '{col_name}' "

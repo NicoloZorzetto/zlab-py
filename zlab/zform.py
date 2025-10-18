@@ -296,6 +296,85 @@ def zform(
     verbose=True,
     silence_warnings=False,
 ):
+    """
+    Automatically identifies and optionally applies the best parametric transformations
+    that linearize relationships between variables in a DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input dataset containing numeric columns.
+    y : str | list[str] | None, default=None
+        Dependent variable(s). If None, all numeric columns are considered.
+        One y will not be used as x for another unless it is explicitly included in x as well.
+    x : str | list[str] | None, default=None
+        Independent variable(s). If None, all numeric columns are considered.
+        If both y and x are None, zform tests all pairwise combinations.
+    group_col : str | list[str] | None, default=None
+        Optional column(s) to group data by before fitting (e.g., "species").
+    eval_metric : {'r2', 'adjr2', 'rmse', 'mae', 'aic', 'bic'}, default='r2'
+        Metric used to evaluate transformation fit quality.
+    transformations : list[str] | None, default=None
+        Subset of transformations to test.
+        Available: {'linear', 'power', 'log_dynamic', 'logistic'}.
+        If None, all are tested.
+    min_obs : int, default=10
+        Minimum number of valid observations required per (y, x) pair.
+    apply : bool, default=False
+        If True, applies the best transformations to the DataFrame and returns
+        transformed columns (requires 'Parameters' in fitted forms).
+    naming : {'standard', 'compact', 'minimal'}, default='standard'
+        Naming convention for transformed columns when apply=True.
+    export_zforms_to : str | Path | None, default=None
+        Optional export path (.csv, .xlsx, .json, .parquet, etc.) for fitted forms.
+    export_zforms_index : bool, default=False
+        Whether to include the index when exporting fitted forms.
+    return_zforms : bool, default=False
+        If True, returns both the transformed DataFrame and a DataFrame of
+        fitted models and parameters.
+    strategy : {'best', 'fixed'}, default='best'
+        Transformation strategy:
+          - "best": fits each model’s parameters via nonlinear optimization.
+          - "fixed": evaluates canonical parameter sets (e.g., ln(x+1), x², logistic).
+        In "best" mode, zform also reports the gain in R² versus fixed transformations.
+    n_jobs : int, default=-1
+        Number of parallel processes to use (-1 = all available cores).
+    verbose : bool, default=True
+        If True, prints progress and timing information.
+    silence_warnings : bool, default=False
+        If True, suppresses warnings.
+
+    Returns
+    -------
+    pandas.DataFrame or (pandas.DataFrame, pandas.DataFrame)
+        - If return_zforms=False: the input DataFrame.
+        - If return_zforms=True: a tuple (the input DataFrame, zforms_df), where:
+            zforms_df includes columns:
+                ['y', 'x', 'Group', 'Best Model', 'Best R2', 'Gain_vs_Fixed_R2', 'Parameters']
+        The input DataFrame may be modified if apply=True.
+
+    Notes
+    -----
+    - When `strategy='best'`, parameters are estimated via `scipy.optimize.curve_fit`
+      using dynamically generated starting points.
+    - When `strategy='fixed'`, pre-defined transformations are evaluated directly
+      without optimization.
+    - Grouped fitting and parallel execution are supported.
+    - The “Gain_vs_Fixed” column quantifies improvement over standard functional forms
+      that would be obtained when `strategy='fixed'`.
+
+    Examples
+    --------
+    >>> from zlab import zform
+    >>> import seaborn as sbn
+    >>> df = sbn.load_dataset("penguins").dropna()
+    >>> df_out, zforms = zform(
+    ...     df, group_col="species", return_zforms=True,
+    ...     strategy="best", apply=True, naming="standard"
+    ... )
+    >>> zforms.head()
+    """
+
     if silence_warnings:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
