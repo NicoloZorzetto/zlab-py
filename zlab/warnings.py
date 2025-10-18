@@ -12,7 +12,7 @@ class ZlabWarning(Warning):
     def __init__(self, message=None, *, stacklevel=None):
         if message:
             # issue immediately as a warning
-            warnings.warn(message, self.__class__, stacklevel=stacklevel or self.default_stacklevel)
+            warnings.warn(message, Warning, stacklevel=stacklevel or self.default_stacklevel)
         else:
             super().__init__(message)
 
