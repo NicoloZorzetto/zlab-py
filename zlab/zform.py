@@ -10,6 +10,7 @@ License
 GPL v3
 """
 
+import __main__
 import warnings
 import time
 import multiprocessing
@@ -27,6 +28,16 @@ except ImportError as e:
         "'pip install -r requirements.txt'"
     )
     raise ImportError(msg)
+
+try:
+    from rich.console import Console
+    from rich.progress import Progress
+    RICH_AVAILABLE = True
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
+
 
 from zlab.warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
 
@@ -391,7 +402,7 @@ def zform(
         )
 
 
-# ------------------ Core orchestration ------------------
+# ------------------ Zform core ------------------
 
 def _zform_core(
     df, y, x, group_col, eval_metric, transformations, min_obs, apply,
@@ -433,12 +444,11 @@ def _zform_core(
     else:
         y_vars, x_vars = y, x
 
+    # --- setup ---
     groups = [("All Data", df)] if group_col is None else df.groupby(group_col)
     zforms = defaultdict(dict)
 
-    if verbose:
-        print(f"\nComputing optimal forms for {len(y_vars)} Y × {len(x_vars)} X combinations...\n")
-
+    # Define all computation jobs first
     jobs = [
         (group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs)
         for group_name, gdf in groups
@@ -447,15 +457,56 @@ def _zform_core(
         if y_var != x_var
     ]
 
+    if verbose:
+        if RICH_AVAILABLE:
+            console.print(f"\n[cyan]Computing optimal forms for "
+                          f"{len(y_vars)} Y × {len(x_vars)} X combinations...[/cyan]\n")
+        else:
+            print(f"\nComputing optimal forms for "
+                  f"{len(y_vars)} Y × {len(x_vars)} X combinations...\n")
+
+    # --- SAFETY: disable parallel mode when run from a top-level script ---
+    if getattr(__main__, "__file__", None) and __main__.__file__.endswith(".py"):
+        if n_jobs != 1:
+            msg = ("Running from a top-level script — parallel mode disabled")
+            ZformWarning(msg)
+            n_jobs = 1
+                
+    # --- execution ---
     start_time = time.time()
+
     if n_jobs and n_jobs != 1:
-        with ProcessPoolExecutor(max_workers=None if n_jobs == -1 else n_jobs) as ex:
+        max_workers = None if n_jobs == -1 else n_jobs
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
             futures = [ex.submit(_fit_pair, j) for j in jobs]
-            zforms_list = [f.result() for f in as_completed(futures)]
+
+            if verbose and RICH_AVAILABLE:
+                with Progress(console=console) as progress:
+                    task = progress.add_task(f"[cyan]Fitting models...", total=len(futures))
+                    zforms_list = []
+                    for f in as_completed(futures):
+                        zforms_list.append(f.result())
+                        progress.advance(task)
+            else:
+                if verbose:
+                    print(f"Computing {len(futures)} pairwise transformations...")
+                zforms_list = [f.result() for f in as_completed(futures)]
     else:
-        zforms_list = [_fit_pair(j) for j in jobs]
+        if verbose and RICH_AVAILABLE:
+            with Progress(console=console) as progress:
+                task = progress.add_task(f"[cyan]Fitting models (sequential)...", total=len(jobs))
+                zforms_list = []
+                for j in jobs:
+                    zforms_list.append(_fit_pair(j))
+                    progress.advance(task)
+        else:
+            if verbose:
+                print(f"Computing {len(jobs)} transformations sequentially...")
+            zforms_list = [_fit_pair(j) for j in jobs]
 
     elapsed = time.time() - start_time
+
+
     total_iterations = sum(r[-1] for r in zforms_list)
     total_specs = len(jobs)
     n_transforms = len(transformations or ["linear", "power", "logistic", "log_dynamic"])
@@ -504,8 +555,9 @@ def _zform_core(
         zforms_df = zforms_df.drop(columns=["Group"], errors="ignore")
 
     if verbose:
-        print(
-            f"Computation completed over {total_specs:,} specifications × {n_transforms} transformations.\n"
+        console.print(
+            f"Computation completed over {total_specs:,} specifications × "
+            f"{n_transforms} transformations.\n"
             f"Total function evaluations: {total_iterations:,}\n"
             f"Elapsed time: {format_time(elapsed)}\n"
             f"Used {cores_used} core{'s' if cores_used > 1 else ''}.\n"

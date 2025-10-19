@@ -18,6 +18,16 @@ except ImportError as e:
            "'pip install -r requirements.txt'")
     raise ImportError(msg)
 
+try:
+    from rich.console import Console
+    from rich.progress import Progress
+    RICH_AVAILABLE = True
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
+
+
 from zlab.warnings import ZformApplyWarning
 
 try:
@@ -149,8 +159,8 @@ def zform_apply(
                 raise ValueError(msg)
 
             groups = df["_zgroup"].unique()
-            if verbose:
-                print(f"Applying group-specific transformations for {len(groups)} groups...")
+            if verbose and RICH_AVAILABLE:
+                console.print(f"Applying group-specific transformations for {len(groups)} groups...")
 
             for group_name, gdf in df.groupby("_zgroup"):
                 sub_zforms = subset.query("Group == @group_name or Group.isnull()")
@@ -191,8 +201,8 @@ def zform_apply(
             df.drop(columns="_zgroup", inplace=True)
 
         else:
-            if verbose:
-                print(f"Applying {len(subset)} global transformations...")
+            if verbose and RICH_AVAILABLE:
+                console.print(f"Applying {len(subset)} global transformations...")
 
             for _, row in subset.iterrows():
                 yv, xv, model, params_str = row["y"], row["x"], row["Best Model"], row["Parameters"]
