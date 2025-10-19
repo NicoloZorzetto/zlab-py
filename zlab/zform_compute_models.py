@@ -4,16 +4,42 @@ Handles the evaluation and optimization of parametric transformations.
 """
 
 import warnings
-import numpy as np
-from scipy.optimize import curve_fit, OptimizeWarning
+
+try:
+    import numpy as np
+    from scipy.optimize import curve_fit, OptimizeWarning
+except ImportError as e:
+    msg = (
+        f"Missing dependency: {e.name}. Please install all requirements via "
+        "'pip install -r requirements.txt'"
+    )
+    raise ImportError(msg)
 
 from zlab._zform_metrics import compute_metric, is_higher_better
 from zlab.zform_functions import (
     linear_func, power_func, log_func_dynamic, logistic_func, guess_initial_params
 )
+from zlab._zform_model_bounds import get_model_bounds
 
 def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="best"):
-    """Fit or evaluate all candidate transformations between x and y."""
+    """
+    Fit or evaluate all candidate transformations between x and y.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Input numeric data for fitting.
+    eval_metric : str, default="r2"
+        Evaluation metric used to compare fits.
+    transformations : list[str] | None
+        Subset of transformations to test; if None, all are tested.
+    strategy : {'best', 'fixed'}, default="best"
+        'best' fits full parametric models, 'fixed' uses canonical parameters.
+
+    Returns
+    -------
+    (best_model, best_score, best_params, gain_vs_fixed, total_iterations)
+    """
     FIXED_DEFAULTS = {
         "linear": [1.0, 0.0],
         "power": [1.0, 2.0],
@@ -31,6 +57,7 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
     if transformations is not None:
         TRANSFORMATIONS = {k: v for k, v in TRANSFORMATIONS.items() if k in transformations}
 
+    # Clean input
     x, y = np.asarray(x, float), np.asarray(y, float)
     mask = np.isfinite(x) & np.isfinite(y)
     x, y = x[mask], y[mask]
@@ -38,10 +65,9 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
         return "N/A", np.nan, None, None, 0
 
     zforms = {}
-    bounds = (-1e8, 1e8)
     total_iters = 0
 
-    # --- Strategy: fixed ---
+    # --- Strategy: fixed (no fitting, no gain computation) ---
     if strategy == "fixed":
         for name, func in TRANSFORMATIONS.items():
             if "log" in name and np.any(x <= -1):
@@ -65,14 +91,20 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
         )
         return best, round(valid[best]["score"], 3), valid[best]["params"], None, 0
 
-    # --- Strategy: best (fit + gain) ---
+    # --- Strategy: best (parametric fitting + gain computation) ---
     for name, func in TRANSFORMATIONS.items():
         if "log" in name and np.any(x <= -1):
             continue
         if name == "power" and np.any(x < 0):
             continue
 
+        # model-specific or scale-aware bounds
+        bounds = get_model_bounds(name, x, y)
+
+        # initial guess for parameters
         p0 = guess_initial_params(x, y, name)
+
+        # two-attempt optimization (perturbed initial guess)
         for attempt in range(2):
             try:
                 with warnings.catch_warnings():
@@ -99,6 +131,7 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
     if not valid:
         return "N/A", np.nan, None, None, total_iters
 
+    # pick best model depending on metric direction
     best = (
         max(valid, key=lambda k: valid[k]["score"])
         if is_higher_better(eval_metric)
@@ -108,7 +141,7 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
     best_score = round(valid[best]["score"], 3)
     best_params = valid[best]["params"]
 
-    # Gain vs fixed
+    # --- Compute gain vs fixed ---
     fixed_scores = {}
     for name, func in TRANSFORMATIONS.items():
         p = FIXED_DEFAULTS.get(name, [])
@@ -130,9 +163,10 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
         else:
             best_fixed = min(fixed_scores, key=lambda k: fixed_scores[k])
             fixed_best_score = fixed_scores[best_fixed]
-            gain = fixed_best_score - best_score
+            gain = fixed_best_score - best_score  # reverse direction for lower-is-better metrics
 
     return best, best_score, best_params, gain, total_iters
+
 
 # --- Parallel fitting wrapper ---
 
