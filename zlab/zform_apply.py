@@ -31,7 +31,7 @@ except ImportError:
 from zlab.warnings import ZformApplyWarning
 
 try:
-    from .zform import (
+    from .zform_functions import (
         linear_func,
         log_func,
         log_func_dynamic,
@@ -39,9 +39,9 @@ try:
         logistic_func,
     )
 except ImportError as e:
-    msg = (f"Could not import {e.name}. "
-           "Ensure the zlab package is intact and that you are running "
-           "your script from the project root if using a prototype version.")
+    msg = (f"Could not import {e.name} from zform_functions. "
+           "Ensure the zlab package structure is intact and that you "
+           "are running from the project root.")
     raise ImportError(msg)
 
 
