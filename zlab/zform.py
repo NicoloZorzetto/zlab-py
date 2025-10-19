@@ -40,6 +40,7 @@ except ImportError:
 
 
 from zlab.warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
+from zlab._zform_metrics import compute_metric, is_higher_better
 
 
 # Use a safe process start method to avoid fork() warnings in Python 3.12+
@@ -50,7 +51,7 @@ except RuntimeError:
     pass
 
 
-# ------------------ Transformation families ------------------
+# --- Transformation families ---
 
 def linear_func(x, a, b):
     return a * x + b
@@ -72,59 +73,9 @@ def power_func(x, a, b):
 def logistic_func(x, L, k, x0):
     return L / (1 + np.exp(-k * (x - x0)))
 
+# --- Guess initial params ---
 
-# ------------------ Evaluation metric ------------------
-
-def compute_metric(name: str, y_true, y_pred, k: int = 0):
-    y_true = np.asarray(y_true, float)
-    y_pred = np.asarray(y_pred, float)
-    n = y_true.size
-    if n == 0 or np.any(~np.isfinite(y_pred)):
-        return np.nan
-
-    resid = y_true - y_pred
-    rss = np.sum(resid ** 2)
-    name = name.lower()
-
-    if name == "r2":
-        tss = np.sum((y_true - np.mean(y_true)) ** 2)
-        return 1 - (rss / tss) if tss != 0 else np.nan
-    elif name == "adjr2":
-        tss = np.sum((y_true - np.mean(y_true)) ** 2)
-        r2 = 1 - (rss / tss) if tss != 0 else np.nan
-        return 1 - (1 - r2) * (n - 1) / (n - k - 1) if n > k + 1 else np.nan
-    elif name == "rmse":
-        return np.sqrt(rss / n)
-    elif name == "mae":
-        return np.mean(np.abs(resid))
-    elif name == "aic":
-        return n * np.log(rss / n) + 2 * k if rss > 0 else -np.inf
-    elif name == "bic":
-        return n * np.log(rss / n) + k * np.log(n) if rss > 0 else -np.inf
-    else:
-        ZformWarning(f"Unknown eval_metric '{name}', falling back to R².")
-        tss = np.sum((y_true - np.mean(y_true)) ** 2)
-        return 1 - (rss / tss) if tss != 0 else np.nan
-
-
-# ------------------ Model fitting ------------------
-
-def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="best"):
-    """
-    Fit or evaluate all candidate transformations between x and y.
-    strategy='best' -> full parametric fit
-    strategy='fixed' -> evaluate canonical parameter sets only
-    """
-
-    # canonical fixed parameters for each model (no fitting)
-    FIXED_DEFAULTS = {
-        "linear": [1.0, 0.0],
-        "power": [1.0, 2.0],
-        "log_dynamic": [1.0, 0.0, np.e],
-        "logistic": [1.0, 1.0, 0.0],
-    }
-
-    def guess_initial_params(x, y, model_name):
+def guess_initial_params(x, y, model_name):
         x_mean, x_std = np.mean(x), np.std(x)
         y_mean, y_std = np.mean(y), np.std(y)
         x_std = x_std or 1.0
@@ -144,6 +95,23 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
             return [float(np.max(y)), 1.0 / (x_std or 1.0), float(np.median(x))]
         else:
             raise ValueError(f"Unknown model '{model_name}'")
+
+
+# --- Model fitting ---
+
+def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="best"):
+    """
+    Fit or evaluate all candidate transformations between x and y.
+    strategy='best' -> full parametric fit
+    strategy='fixed' -> evaluate canonical parameter sets only
+    """
+
+    FIXED_DEFAULTS = {
+        "linear": [1.0, 0.0],
+        "power": [1.0, 2.0],
+        "log_dynamic": [1.0, 0.0, np.e],
+        "logistic": [1.0, 1.0, 0.0],
+    }
 
     TRANSFORMATIONS = {
         "linear": linear_func,
@@ -165,7 +133,8 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
     bounds = (-1e8, 1e8)
     total_iters = 0
 
-    # ---- FIXED STRATEGY ----
+    # --- Strategy = "fixed" (no fitting, no gain) ---
+
     if strategy == "fixed":
         for name, func in TRANSFORMATIONS.items():
             if "log" in name and np.any(x <= -1):
@@ -177,13 +146,20 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
                 zforms[name] = {"score": score, "params": p}
             except Exception:
                 continue
+
         valid = {k: v for k, v in zforms.items() if np.isfinite(v["score"])}
         if not valid:
             return "N/A", np.nan, None, None, 0
-        best = max(valid, key=lambda k: valid[k]["score"])
+
+        if is_higher_better(eval_metric):
+            best = max(valid, key=lambda k: valid[k]["score"])
+        else:
+            best = min(valid, key=lambda k: valid[k]["score"])
+
         return best, round(valid[best]["score"], 3), valid[best]["params"], None, 0
 
-    # ---- BEST STRATEGY ----
+    # --- Strategy = "best" (parametric fitting + gain computation) ---
+
     for name, func in TRANSFORMATIONS.items():
         if "log" in name and np.any(x <= -1):
             continue
@@ -217,7 +193,11 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
     if not valid:
         return "N/A", np.nan, None, None, total_iters
 
-    best = max(valid, key=lambda k: valid[k]["score"])
+    if is_higher_better(eval_metric):
+        best = max(valid, key=lambda k: valid[k]["score"])
+    else:
+        best = min(valid, key=lambda k: valid[k]["score"])
+
     best_score = round(valid[best]["score"], 3)
     best_params = valid[best]["params"]
 
@@ -236,14 +216,19 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
 
     gain = None
     if fixed_scores:
-        best_fixed = max(fixed_scores, key=lambda k: fixed_scores[k])
-        fixed_best_score = fixed_scores[best_fixed]
-        gain = best_score - fixed_best_score
+        if is_higher_better(eval_metric):
+            best_fixed = max(fixed_scores, key=lambda k: fixed_scores[k])
+            fixed_best_score = fixed_scores[best_fixed]
+            gain = best_score - fixed_best_score
+        else:
+            best_fixed = min(fixed_scores, key=lambda k: fixed_scores[k])
+            fixed_best_score = fixed_scores[best_fixed]
+            gain = fixed_best_score - best_score  # inverted direction for lower-better metrics
 
     return best, best_score, best_params, gain, total_iters
 
 
-# ------------------ Parallel fitting wrapper ------------------
+# --- Parallel fitting wrapper ---
 
 def _fit_pair(args):
     group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs = args
@@ -258,7 +243,7 @@ def _fit_pair(args):
     return (group_name, y_var, x_var, model, score, params, gain, n_iter)
 
 
-# ------------------ Export ------------------
+# --- Export ---
 
 def export_zforms(df, path):
     path = Path(path)
@@ -287,7 +272,7 @@ def export_zforms(df, path):
     return path
 
 
-# ------------------ Main zform() API ------------------
+# --- Main zform() API ---
 
 def zform(
     df,
@@ -402,7 +387,7 @@ def zform(
         )
 
 
-# ------------------ Zform core ------------------
+# --- Zform core ---
 
 def _zform_core(
     df, y, x, group_col, eval_metric, transformations, min_obs, apply,
