@@ -21,7 +21,15 @@ from zlab.zform_functions import (
 )
 from zlab._zform_model_bounds import get_model_bounds
 
-def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="best"):
+
+def compute_best_model(
+        x,
+        y,
+        eval_metric="r2",
+        normalize_metrics=False,
+        transformations=None,
+        strategy="best",
+        maxfev=100000):
     """
     Fit or evaluate all candidate transformations between x and y.
 
@@ -29,8 +37,19 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
     ----------
     x, y : array-like
         Input numeric data for fitting.
-    eval_metric : str, default="r2"
-        Evaluation metric used to compare fits.
+    eval_metric : str | list[str] | dict[str, float] | callable, default='r2'
+        Evaluation metric(s) used to assess transformation fit quality.
+        Available built-in metrics: {'r2', 'adjr2', 'rmse', 'mae', 'aic', 'bic'}.
+        - If a **string** is passed, a single metric is used (e.g., "r2").
+        - If a **list** is passed, all metrics are averaged equally.
+        - If a **dict** is passed, values are treated as weights for averaging
+          (e.g. `{"r2": 1.0, "aic": -0.2}`).
+        - If a **callable** is passed, it must accept `(y, y_pred, k)` and
+          return a numeric score.
+    normalize_metrics : bool, default=False
+        When True, evaluation metrics are rescaled to [0, 1] before combining.
+        This helps ensure balanced weighting when combining metrics of
+        different scales or directions.
     transformations : list[str] | None
         Subset of transformations to test; if None, all are tested.
     strategy : {'best', 'fixed'}, default="best"
@@ -75,8 +94,10 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
             p = FIXED_DEFAULTS.get(name, [])
             try:
                 y_pred = func(x, *p)
-                score = compute_metric(eval_metric, y, y_pred, k=len(p))
-                zforms[name] = {"score": score, "params": p}
+                metrics = compute_multi_metrics(eval_metric, y, y_pred, k=len(p))
+                score = compute_composite_score(metrics, eval_metric, normalize=normalize_metrics)
+                zforms[name] = {"score": score, "metrics": metrics, "params": p}
+
             except Exception:
                 continue
 
@@ -115,14 +136,16 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
                         p0=np.array(p0) * (1 + np.random.uniform(-0.1, 0.1, len(p0)))
                         if attempt == 1 else p0,
                         bounds=bounds,
-                        maxfev=80000,
+                        maxfev=maxfev,
                         method="trf",
                         full_output=True,
                     )
                 total_iters += infodict.get("nfev", 0)
                 y_pred = func(x, *popt)
-                score = compute_metric(eval_metric, y, y_pred, k=len(popt))
-                zforms[name] = {"score": score, "params": popt}
+                metrics = compute_multi_metrics(eval_metric, y, y_pred, k=len(popt))
+                score = compute_composite_score(metrics, eval_metric, normalize=normalize_metrics)
+                zforms[name] = {"score": score, "metrics": metrics, "params": popt}
+
                 break
             except Exception:
                 continue
@@ -170,14 +193,21 @@ def compute_best_model(x, y, eval_metric="r2", transformations=None, strategy="b
 
 # --- Parallel fitting wrapper ---
 
-def _fit_pair(args):
-    group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs = args
+def _fit_pair(args, normalize_metrics=False):
+    group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs, maxfev = args
     x, y = gdf[x_var], gdf[y_var]
     valid = x.notna() & y.notna() & np.isfinite(x) & np.isfinite(y)
     x_clean, y_clean = x[valid].to_numpy(), y[valid].to_numpy()
     if len(x_clean) < min_obs:
         return (group_name, y_var, x_var, "N/A", np.nan, None, None, 0)
+
     model, score, params, gain, n_iter = compute_best_model(
-        x_clean, y_clean, eval_metric, transformations, strategy
+        x_clean,
+        y_clean,
+        eval_metric=eval_metric,
+        normalize_metrics=normalize_metrics,
+        transformations=transformations,
+        strategy=strategy,
+        maxfev=maxfev,
     )
     return (group_name, y_var, x_var, model, score, params, gain, n_iter)

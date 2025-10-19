@@ -89,6 +89,7 @@ def zform(
     x=None,
     group_col=None,
     eval_metric="r2",
+    normalize_metrics=False,
     transformations=None,
     min_obs=10,
     apply=False,
@@ -98,6 +99,7 @@ def zform(
     return_zforms=False,
     strategy="best",
     n_jobs=-1,
+    maxfev=100000,
     verbose=True,
     silence_warnings=False,
 ):
@@ -117,8 +119,19 @@ def zform(
         If both y and x are None, zform tests all pairwise combinations.
     group_col : str | list[str] | None, default=None
         Optional column(s) to group data by before fitting (e.g., "species").
-    eval_metric : {'r2', 'adjr2', 'rmse', 'mae', 'aic', 'bic'}, default='r2'
-        Metric used to evaluate transformation fit quality.
+    eval_metric : str | list[str] | dict[str, float] | callable, default='r2'
+        Evaluation metric(s) used to assess transformation fit quality.
+        Available built-in metrics: {'r2', 'adjr2', 'rmse', 'mae', 'aic', 'bic'}.
+        - If a **string** is passed, a single metric is used (e.g., "r2").
+        - If a **list** is passed, all metrics are averaged equally.
+        - If a **dict** is passed, values are treated as weights for averaging
+          (e.g. `{"r2": 1.0, "aic": -0.2}`).
+        - If a **callable** is passed, it must accept `(y, y_pred, k)` and
+          return a numeric score.
+    normalize_metrics : bool, default=False
+        When True, evaluation metrics are rescaled to [0, 1] before combining.
+        This helps ensure balanced weighting when combining metrics of
+        different scales or directions.
     transformations : list[str] | None, default=None
         Subset of transformations to test.
         Available: {'linear', 'power', 'log_dynamic', 'logistic'}.
@@ -144,6 +157,9 @@ def zform(
         In "best" mode, zform also reports the gain in R² versus fixed transformations.
     n_jobs : int, default=-1
         Number of parallel processes to use (-1 = all available cores).
+    maxfev : int, default=100000
+        Maximum number of function evaluations during optimization.
+        Increasing this value can improve convergence at the cost of computation time.
     verbose : bool, default=True
         If True, prints progress and timing information.
     silence_warnings : bool, default=False
@@ -171,8 +187,8 @@ def zform(
     Examples
     --------
     >>> from zlab import zform
-    >>> import seaborn as sbn
-    >>> df = sbn.load_dataset("penguins").dropna()
+    >>> import pandas as pd
+    >>> df = pd.read_csv('path/to/file.csv')
     >>> df_out, zforms = zform(
     ...     df, group_col="species", return_zforms=True,
     ...     strategy="best", apply=True, naming="standard"
@@ -186,13 +202,13 @@ def zform(
             return _zform_core(
                 df, y, x, group_col, eval_metric, transformations, min_obs, apply,
                 naming, export_zforms_to, export_zforms_index, return_zforms,
-                strategy, n_jobs, verbose
+                strategy, n_jobs, maxfev, verbose
             )
     else:
         return _zform_core(
             df, y, x, group_col, eval_metric, transformations, min_obs, apply,
             naming, export_zforms_to, export_zforms_index, return_zforms,
-            strategy, n_jobs, verbose
+            strategy, n_jobs, maxfev, verbose
         )
 
 
@@ -201,7 +217,7 @@ def zform(
 def _zform_core(
     df, y, x, group_col, eval_metric, transformations, min_obs, apply,
     naming, export_zforms_to, export_zforms_index, return_zforms,
-    strategy, n_jobs, verbose
+        strategy, n_jobs, maxfev, verbose
 ):
     if isinstance(y, str):
         y = [y]
@@ -244,7 +260,7 @@ def _zform_core(
 
     # Define all computation jobs first
     jobs = [
-        (group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs)
+        (group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs, maxfev)
         for group_name, gdf in groups
         for y_var in y_vars
         for x_var in x_vars
@@ -291,12 +307,12 @@ def _zform_core(
                 task = progress.add_task(f"[cyan]Fitting models (sequential)...", total=len(jobs))
                 zforms_list = []
                 for j in jobs:
-                    zforms_list.append(_fit_pair(j))
+                    zforms_list.append(_fit_pair(j, normalize_metrics))
                     progress.advance(task)
         else:
             if verbose:
                 print(f"Computing {len(jobs)} transformations sequentially...")
-            zforms_list = [_fit_pair(j) for j in jobs]
+            zforms_list = [_fit_pair(j, normalize_metrics) for j in jobs]
 
     elapsed = time.time() - start_time
 
