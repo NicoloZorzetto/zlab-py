@@ -66,7 +66,7 @@ def get_model_bounds(model_name, x, y):
     and falls back to defaults with a runtime warning.
     """
 
-    if model_name not in BONDS_FUNC:
+    if model_name not in BOUNDS_FUNCS:
         ZformRuntimeWarning(f"Using default bounds for unknown model '{model_name}'.")
     
     func = BOUNDS_FUNCS.get(model_name, _bounds_default)
