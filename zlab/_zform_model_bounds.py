@@ -32,7 +32,9 @@ def _bounds_power(x, y):
 def _bounds_log_dynamic(x, y):
     y_range = np.ptp(y) or 1.0
     b_bound = 10 * np.abs(np.mean(y))
-    return ([-y_range, -b_bound, 1.001], [y_range, b_bound, 1e4])
+    base_min = 1.001
+    base_max = max(1e3, np.max(np.abs(x)) + 10)
+    return ([-y_range, -b_bound, base_min], [y_range, b_bound, base_max])
 
 
 def _bounds_logistic(x, y):
@@ -63,6 +65,10 @@ def get_model_bounds(model_name, x, y):
     Automatically detects non-finite, reversed, or excessively wide bounds
     and falls back to defaults with a runtime warning.
     """
+
+    if model_name not in BONDS_FUNC:
+        ZformRuntimeWarning(f"Using default bounds for unknown model '{model_name}'.")
+    
     func = BOUNDS_FUNCS.get(model_name, _bounds_default)
     try:
         bounds = func(x, y)
