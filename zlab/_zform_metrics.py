@@ -194,9 +194,7 @@ def compute_composite_score(metrics_dict, eval_metric, normalize=False, normaliz
     normalize: bool
     normalize_method: {'minmax', 'zscore'}
     """
-    from zlab._zform_metrics import is_higher_better  # local import for safety
-    import numpy as np
-
+    
     # --- prepare metrics & weights ---
     if isinstance(eval_metric, str):
         return metrics_dict.get(eval_metric, np.nan)

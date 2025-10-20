@@ -1,5 +1,11 @@
 """
 _zform_metadata.py — attaches and extracts zform metadata safely
+
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
 """
 
 import hashlib
@@ -28,7 +34,7 @@ def make_metadata(custom_funcs=None):
             for f in custom_funcs
         ],
     }
-    metadata["Sha256"] = None
+    metadata["sha256"] = None
 
     return metadata
 

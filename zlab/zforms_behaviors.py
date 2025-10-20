@@ -1,21 +1,24 @@
 """
 zforms_behaviors.py — Shared behavior functions for Zforms.
 
-This isolates apply/export/import/validate logic so that
-zforms_object.py can stay minimal and maintainable.
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
 """
 
 from pathlib import Path
 import pandas as pd
 
 from zlab._zform_metadata import extract_metadata, attach_metadata, compute_sha256
-from zlab.zform_apply import zform_apply
+from zlab.zform_apply import _zform_apply
 from zlab.warnings import ZformRuntimeWarning, ZformExportWarning
 
 
 def apply_zforms(df: pd.DataFrame, zforms_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
     """Apply zform transformations to a new DataFrame."""
-    return zform_apply(df, zforms_df, **kwargs)
+    return _zform_apply(df, zforms_df, **kwargs)
 
 
 def export_zforms(zforms_df: pd.DataFrame, metadata: dict, path: str | Path) -> Path:
@@ -102,5 +105,10 @@ def validate_zforms(df: pd.DataFrame, metadata: dict) -> bool:
         raise ValueError(
             "Invalid or missing custom function metadata."
         )
+
+    custom_funcs = metadata.get("custom_functions", {})
+    if not isinstance(custom_funcs, (list, dict)):
+        ZformRuntimeWarning("Unexpected custom_functions metadata type; continuing without strict check.")
+
 
     return valid

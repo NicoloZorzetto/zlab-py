@@ -40,9 +40,9 @@ except ImportError:
 
 
 from zlab.warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
+from zlab._zform_config import ZformConfig
 from zlab.zform_functions import get_zform_functions, zform_function
-from zlab._zform_metrics import compute_metric, is_higher_better
-from zlab.zform_compute_models import compute_best_model, _fit_pair
+from zlab.zform_compute_models import _fit_pair
 from zlab._zform_metadata import make_metadata, attach_metadata, compute_sha256
 from zlab.zforms_object import Zforms
 
@@ -118,22 +118,18 @@ def zform(
     y=None,
     x=None,
     group_col=None,
-    eval_metric="r2",
-    normalize_metrics=False,
     transformations=None,
-    min_obs=10,
     apply=False,
     naming="standard",
     export_zforms_to=None,
     export_zforms_index=False,
-    return_zforms=False,
-    strategy="best",
-    n_jobs=-1,
-    maxfev=100000,
+    return_zforms=True,
     verbose=True,
     silence_warnings=False,
+    config: ZformConfig | None = None,
+    **kwargs,
 ):
-       """
+    """
     Automatically identifies, fits, and optionally applies the best parametric
     transformations that linearize relationships between variables in a DataFrame.
 
@@ -161,6 +157,10 @@ def zform(
     normalize_metrics : bool, default=False
         When True, evaluation metrics are rescaled to [0, 1] before combining.
         Helps balance metrics with different scales or directions.
+    penalize_theta_in_ic : bool, default=False
+        When False AIC/BIC penalize only intercept and slope (k=2).
+        When True AIC/BIC penalize intercept, slope and number of transformation
+        parameters (k = 2 + len(theta))
     transformations : list[str | callable] | None, default=None
         Subset of transformations to test.
         Default: all built-in forms (`['linear', 'power', 'log_dynamic', 'logistic']`).
@@ -179,9 +179,10 @@ def zform(
         Optional export path (.csv, .xlsx, .json, .parquet, etc.) for fitted transformations.
     export_zforms_index : bool, default=False
         Whether to include the index when exporting fitted forms.
-    return_zforms : bool, default=False
-        If True, returns both the transformed DataFrame and a `Zforms` object
-        containing fitted models, parameters, and embedded metadata.
+    return_zforms : bool, default=True
+        If True, returns both a `Zforms` object and the (optionally) transformed input DataFrame.
+        The `Zforms` contains fitted models, parameters, and embedded metadata.
+        If False, returns just the (optionally) transformed input DataFrame.
     strategy : {'best', 'fixed'}, default='best'
         Transformation strategy:
           - "best": fits each model’s parameters via nonlinear optimization.
@@ -200,14 +201,14 @@ def zform(
 
     Returns
     -------
-    pandas.DataFrame or (pandas.DataFrame, Zforms)
-        - If `return_zforms=False`: returns the transformed DataFrame (or original if apply=False).
-        - If `return_zforms=True`: returns a tuple `(df_out, zforms_obj)`, where:
-            * `df_out` is the transformed DataFrame.
+    (Zforms, pandas.DataFrame) or pandas.DataFrame 
+        - If `return_zforms=True`: returns a tuple `(zforms_obj, df_out)`, where:
             * `zforms_obj` is a `Zforms` instance containing:
                 - the full fitted forms table
                 - metadata (version, timestamp, hash, and any custom functions)
                 - methods for validation, export, reapplication, and summary display.
+            * `df_out` is the transformed DataFrame.
+        - If `return_zforms=False`: returns the transformed DataFrame (or original if apply=False).
 
     Notes
     -----
@@ -219,10 +220,24 @@ def zform(
 
     Examples
     --------
+    # --- Fit only ---
     >>> from zlab import zform
     >>> import pandas as pd
     >>> df = pd.read_csv("data.csv")
-    >>> df_out, zf = zform(
+    >>> zf = zform(
+    ...     df, group_col="species", return_zforms=True,
+    ...     strategy="best"
+    ... )
+    >>> zf.summary()
+    >>> zf.export_to("results.json")
+    >>> zf.validate()
+    True
+
+    # --- Fit and apply ---
+    >>> from zlab import zform
+    >>> import pandas as pd
+    >>> df = pd.read_csv("data.csv")
+    >>> zf, df_out = zform(
     ...     df, group_col="species", return_zforms=True,
     ...     strategy="best", apply=True, naming="standard"
     ... )
@@ -232,28 +247,40 @@ def zform(
     True
     """
 
+    # If no user config pull defaults
+    config = config.override(**kwargs) if config else ZformConfig(**kwargs)
+
+    eval_metric = config.eval_metric
+    normalize_metrics = config.normalize_metrics
+    penalize_theta_in_ic = config.penalize_theta_in_ic
+    strategy = config.strategy
+    min_obs = config.min_obs
+    maxfev = config.maxfev
+
+    
     if silence_warnings:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             return _zform_core(
-                df, y, x, group_col, eval_metric, transformations, normalize_metrics,
-                min_obs, apply, naming, export_zforms_to, export_zforms_index,
-                return_zforms, strategy, n_jobs, maxfev, verbose
+                df, y, x, group_col, transformations,
+                apply, naming, export_zforms_to, export_zforms_index,
+                return_zforms, verbose, config
             )
+
     else:
         return _zform_core(
-            df, y, x, group_col, eval_metric, transformations, normalize_metrics,
-            min_obs, apply, naming, export_zforms_to, export_zforms_index,
-            return_zforms, strategy, n_jobs, maxfev, verbose
+            df, y, x, group_col, transformations,
+            apply, naming, export_zforms_to, export_zforms_index,
+            return_zforms, verbose, config
         )
 
 
 # --- Zform core ---
 
 def _zform_core(
-    df, y, x, group_col, eval_metric, transformations, normalize_metrics,
-    min_obs, apply, naming, export_zforms_to, export_zforms_index,
-    return_zforms, strategy, n_jobs, maxfev, verbose
+    df, y, x, group_col, transformations,
+    apply, naming, export_zforms_to, export_zforms_index,
+    return_zforms, verbose, config: ZformConfig
 ):
     if isinstance(y, str):
         y = [y]
@@ -301,12 +328,13 @@ def _zform_core(
 
     # Define all computation jobs first
     jobs = [
-        (group_name, gdf, y_var, x_var, eval_metric, transformations, strategy, min_obs, maxfev)
+        (group_name, gdf, y_var, x_var, transformations)
         for group_name, gdf in groups
         for y_var in y_vars
         for x_var in x_vars
         if y_var != x_var
     ]
+
 
     if verbose:
         if RICH_AVAILABLE:
@@ -318,18 +346,18 @@ def _zform_core(
 
     # --- SAFETY: disable parallel mode when run from a top-level script ---
     if getattr(__main__, "__file__", None) and __main__.__file__.endswith(".py"):
-        if n_jobs != 1:
+        if config.n_jobs != 1:
             msg = ("Running from a top-level script — parallel mode disabled")
             ZformWarning(msg)
-            n_jobs = 1
+            config.n_jobs = 1
                 
     # --- execution ---
     start_time = time.time()
 
-    if n_jobs and n_jobs != 1:
-        max_workers = None if n_jobs == -1 else n_jobs
+    if config.n_jobs and config.n_jobs != 1:
+        max_workers = None if config.n_jobs == -1 else config.n_jobs
         with ProcessPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(_fit_pair, j) for j in jobs]
+            futures = [ex.submit(_fit_pair, j, config) for j in jobs]
 
             if verbose and RICH_AVAILABLE:
                 with Progress(console=console) as progress:
@@ -348,12 +376,12 @@ def _zform_core(
                 task = progress.add_task(f"[cyan]Fitting models (sequential)...", total=len(jobs))
                 zforms_list = []
                 for j in jobs:
-                    zforms_list.append(_fit_pair(j, normalize_metrics))
+                    zforms_list.append(_fit_pair(j, config=config))
                     progress.advance(task)
         else:
             if verbose:
                 print(f"Computing {len(jobs)} transformations sequentially...")
-            zforms_list = [_fit_pair(j, normalize_metrics) for j in jobs]
+            zforms_list = [_fit_pair(j, config=config) for j in jobs]
 
     elapsed = time.time() - start_time
 
@@ -361,7 +389,7 @@ def _zform_core(
     total_iterations = sum(r[-1] for r in zforms_list)
     total_specs = len(jobs)
     n_transforms = len(transformations or ["linear", "power", "logistic", "log_dynamic"])
-    cores_used = multiprocessing.cpu_count() if n_jobs == -1 else (n_jobs if n_jobs != 1 else 1)
+    cores_used = multiprocessing.cpu_count() if config.n_jobs == -1 else (config.n_jobs if config.n_jobs != 1 else 1)
 
     def format_time(seconds):
         if seconds < 60:
@@ -376,7 +404,9 @@ def _zform_core(
 
     for group_name, y_var, x_var, model, score, params, gain, _ in zforms_list:
         zforms[(y_var, x_var)][f"{group_name} - best model"] = model
-        zforms[(y_var, x_var)][f"{group_name} - best {eval_metric.upper()}"] = score
+        metric_label = (config.eval_metric.upper()
+                if isinstance(config.eval_metric, str) else "SCORE")
+        zforms[(y_var, x_var)][f"{group_name} - best {metric_label}"] = score
         zforms[(y_var, x_var)][f"{group_name} - gain_vs_fixed"] = gain
         zforms[(y_var, x_var)][f"{group_name} - params"] = (
             ", ".join(f"{p:.5g}" for p in params) if params is not None else None
@@ -388,16 +418,20 @@ def _zform_core(
             if "best model" not in key:
                 continue
             group_name = key.split(" - ")[0]
-            metric_key = f"{group_name} - best {eval_metric.upper()}"
+            metric_label = (config.eval_metric.upper()
+                if isinstance(config.eval_metric, str) else "SCORE")
+            metric_key = f"{group_name} - best {metric_label}"
             gain_key = f"{group_name} - gain_vs_fixed"
             params_key = f"{group_name} - params"
+            metric_label = (config.eval_metric.upper()
+                if isinstance(config.eval_metric, str) else "SCORE")
             records.append({
                 "y": y_var,
                 "x": x_var,
                 "Group": None if group_name == "All Data" else group_name,
                 "Best Model": model_name,
-                f"Best {eval_metric.upper()}": result_dict.get(metric_key, np.nan),
-                f"Gain_vs_Fixed_{eval_metric.upper()}": result_dict.get(gain_key, np.nan),
+                f"Best {metric_label}": result_dict.get(metric_key, np.nan),
+                f"Gain_vs_Fixed_{metric_key}": result_dict.get(gain_key, np.nan),
                 "Parameters": result_dict.get(params_key, None),
             })
 
@@ -407,6 +441,7 @@ def _zform_core(
 
     # Add metadata for future use, reference and validation
     metadata = make_metadata(custom_funcs)
+    metadata["config"] = config.as_dict()
     metadata["sha256"] = compute_sha256(zforms_df)
     zforms_df = attach_metadata(zforms_df, metadata)
     zforms = Zforms(zforms_df)
@@ -421,13 +456,9 @@ def _zform_core(
         )
 
     if apply:
-        try:
-            from .zform_apply import zform_apply
-        except ImportError:
-            from zform_apply import zform_apply
-        df = zform_apply(df, zforms, naming=naming)
+        df = zforms.apply(df, naming=naming, y=y, x=x, group_col=group_col, verbose=verbose)
 
     if export_zforms_to:
-        export_zforms(zforms, export_zforms_to)
+        zforms.export_to(export_zforms_to)
 
-    return (df, zforms) if return_zforms else df
+    return (zforms, df) if return_zforms else df

@@ -33,7 +33,7 @@ from zlab.zform_functions import get_zform_functions, zform_function
 from zlab._zform_metadata import extract_metadata
 
 
-def zform_apply(
+def _zform_apply(
     df,
     zforms,
     y=None,
@@ -43,7 +43,7 @@ def zform_apply(
     verbose=True,
     silence_warnings=False,
 ):
-        """
+    """
     Apply one or multiple previously computed zform transformations to a DataFrame.
 
     Parameters
@@ -81,10 +81,11 @@ def zform_apply(
     - Custom transformations stored in metadata are automatically restored
       and registered before application.
     - Column names are dynamically generated depending on the `naming` mode:
-        * standard → `x_z_model_for_y`
-        * compact  → `x_z_model_y`
-        * minimal  → `x_z_model`
+        - standard → `x_z_model_for_y`
+        - compact  → `x_z_model_y`
+        - minimal  → `x_z_model`
     - Grouped transformations are applied per group if `group_col` is provided.
+      Group names are appended for non-minimal naming.
 
     Examples
     --------
@@ -92,7 +93,6 @@ def zform_apply(
     >>> df_out.columns
     Index(['x', 'y', 'x_z_power_for_y'], dtype='object')
     """
-
     df = df.copy()
 
     if silence_warnings:
@@ -123,46 +123,51 @@ def zform_apply(
                 "Refit with a newer version of zform() or check the export."
             )
 
+               # --- Auto-restore grouping if zforms were fitted by group ---
+        if group_col is None and "Group" in zforms.columns:
+            config = metadata.get("config", {})
+            auto_group_col = config.get("group_col", None)
+            if auto_group_col is not None:
+                group_col = auto_group_col
+                if not silence_warnings:
+                    group_desc = (
+                        ", ".join(auto_group_col)
+                        if isinstance(auto_group_col, (list, tuple))
+                        else str(auto_group_col)
+                    )
+                    ZformApplyWarning(f"No group_col provided — defaulting to original grouping: {group_desc}")
+
         # --- Restore custom functions from metadata ---
         custom_funcs = metadata.get("custom_functions", {})
 
-        # Normalize format: list → dict
         if isinstance(custom_funcs, list):
-            # assume list of function names, cannot restore source
             if verbose:
-                print("⚠️  Metadata contains only function names — skipping code restoration.")
+                print("Metadata contains only function names — skipping code restoration.")
             custom_funcs = {}
         elif not isinstance(custom_funcs, dict):
             raise TypeError(f"Invalid metadata['custom_functions'] type: {type(custom_funcs)}")
 
         for name, func_info in custom_funcs.items():
             try:
-                # Handle both string and dict metadata formats
                 source = func_info.get("source") if isinstance(func_info, dict) else str(func_info)
                 if not source:
                     raise ValueError(f"No source found for custom function '{name}'")
-
                 source_clean = source.strip()
-                SAFE_GLOBALS = {"np": __import__("numpy")}  # safe namespace
-
+                SAFE_GLOBALS = {"np": __import__("numpy")}
                 if source_clean.startswith("lambda"):
                     func = eval(source_clean, SAFE_GLOBALS)
                 else:
                     namespace = {}
                     exec(source_clean, SAFE_GLOBALS, namespace)
                     func = next(v for v in namespace.values() if callable(v))
-
                 zform_function(name)(func)
                 if verbose:
                     print(f"Restored custom function: {name}")
-
             except Exception as e:
                 raise RuntimeError(f"Failed to restore custom function '{name}': {e}") from e
 
-
-
-        # --- Get all known transformations (built-in + registered) ---
         TRANSFORMATIONS = get_zform_functions()
+        TRANSFORMATIONS = {k.lower(): v for k, v in TRANSFORMATIONS.items()}
 
         if isinstance(y, str):
             y = [y]
@@ -181,9 +186,7 @@ def zform_apply(
                 ZformApplyWarning(msg)
             kept = [v for v in vars_list if v in available]
             if not kept:
-                msg = (f"No valid {name} remain after filtering "
-                       "(none found in zforms).")
-                raise ValueError(msg)
+                raise ValueError(f"No valid {name} remain after filtering (none found in zforms).")
             return kept
 
         y = _filter_valid(y, available_y, "y")
@@ -191,10 +194,10 @@ def zform_apply(
 
         if y is None and x is None:
             if not silence_warnings:
-                msg = ("Neither y nor x specified — "
-                       "applying ALL pairwise transformations.\n"
-                       "This may create a column for every y~x combination "
-                       "found in 'zforms'.")
+                msg = (
+                    "Neither y nor x specified — applying ALL pairwise transformations.\n"
+                    "This may create a column for every y~x combination found in 'zforms'."
+                )
                 ZformApplyWarning(msg)
             subset = zforms.copy()
         elif y is not None and x is None:
@@ -205,18 +208,35 @@ def zform_apply(
             subset = zforms.query("y in @y and x in @x")
 
         if subset.empty:
-            msg = ("No matching transformations found for the given "
-                   "y/x pairs in zforms. Ensure they were fitted by zform().")
-            raise ValueError(msg)
+            raise ValueError("No matching transformations found for the given y/x pairs in zforms.")
 
+        # --- Helper for naming convention ---
+        def _make_col_name(xv, yv, model, group_name=None):
+            """Return the transformed column name based on naming mode and group."""
+            group_suffix = ""
+            if group_name and naming != "minimal":
+                if isinstance(group_name, (list, tuple)):
+                    group_suffix = "_" + "_".join(str(g) for g in group_name)
+                else:
+                    group_suffix = f"_{group_name}"
+
+            if naming == "standard":
+                return f"{xv}_z_{model}_for_{yv}{group_suffix}"
+            elif naming == "compact":
+                return f"{xv}_z_{model}_{yv}{group_suffix}"
+            elif naming == "minimal":
+                return f"{xv}_z_{model}"
+            else:
+                raise ValueError("Invalid naming mode — use 'standard', 'compact', or 'minimal'.")
+            
+        # --- Apply transformations ---
         if group_col is not None and "Group" in zforms.columns:
             if isinstance(group_col, str):
                 df["_zgroup"] = df[group_col].astype(str)
             elif isinstance(group_col, list):
                 df["_zgroup"] = df[group_col].astype(str).agg("_".join, axis=1)
             else:
-                msg = ("group_col must be None, str, or list of str.")
-                raise ValueError(msg)
+                raise ValueError("group_col must be None, str, or list of str.")
 
             groups = df["_zgroup"].unique()
             if verbose and RICH_AVAILABLE:
@@ -233,32 +253,19 @@ def zform_apply(
                         continue
                     if xv not in df.columns or yv not in df.columns:
                         if not silence_warnings:
-                            msg = (f"Skipping ({yv}, {xv}) — missing column in df.")
-                            ZformApplyWarning(msg)
+                            ZformApplyWarning(f"Skipping ({yv}, {xv}) — missing column in df.")
                         continue
-
                     try:
                         params = [float(p.strip()) for p in params_str.split(",")]
                         func = TRANSFORMATIONS.get(model.lower())
                         if func is None:
-                            raise ValueError(f"Unknown transformation '{model}' — cannot apply.")
-                        if naming == "standard":
-                            col_name = f"{xv}_z_{model}_for_{yv}_{group_name}"
-                        elif naming == "compact":
-                            col_name = f"{xv}_z_{model}_{yv}_{group_name}"
-                        elif naming == "minimal":
-                            col_name = f"{xv}_z_{model}_{group_name}"
-                        else:
-                            msg = ("Invalid naming mode. "
-                                   "Use 'standard', 'compact', or 'minimal'.")
-                            raise ValueError(msg)
+                            raise ValueError(f"Unknown transformation '{model}' — could not apply.")
+                        col_name = _make_col_name(xv, yv, model, group_name)
                         mask = df["_zgroup"] == group_name
                         df.loc[mask, col_name] = func(df.loc[mask, xv].to_numpy(), *params)
                     except Exception as e:
                         if not silence_warnings:
-                            msg = (f"Failed applying {model} to {xv} "
-                                   f"~ {yv} (group={group_name}): {e}")
-                            ZformApplyWarning(msg)
+                            ZformApplyWarning(f"Failed applying {model} to {xv} ~ {yv} (group={group_name}): {e}")
 
             df.drop(columns="_zgroup", inplace=True)
 
@@ -272,34 +279,23 @@ def zform_apply(
                     continue
                 if xv not in df.columns or yv not in df.columns:
                     if not silence_warnings:
-                        msg = (f"Skipping ({yv}, {xv}) — missing column in df.")
-                        ZformApplyWarning(msg)
+                        ZformApplyWarning(f"Skipping ({yv}, {xv}) — missing column in df.")
                     continue
-
                 try:
                     params = [float(p.strip()) for p in params_str.split(",")]
                     func = TRANSFORMATIONS.get(model.lower())
                     if func is None:
                         raise ValueError(f"Unknown transformation '{model}' — cannot apply.")
-                    if naming == "standard":
-                        col_name = f"{xv}_z_{model}_for_{yv}"
-                    elif naming == "compact":
-                        col_name = f"{xv}_z_{model}_{yv}"
-                    elif naming == "minimal":
-                        col_name = f"{xv}_z_{model}"
-                    else:
-                        msg = ("Invalid naming mode. "
-                               "Use 'standard', 'compact', or 'minimal'.")
-                        raise ValueError(msg)
+                    col_name = _make_col_name(xv, yv, model)
                     if naming == "minimal" and col_name in df.columns and not silence_warnings:
-                        msg = (f"Overwriting existing column '{col_name}' "
-                               "(multiple y for same x).")
+                        msg = (f"Overwriting existing column '{col_name}' (multiple y for same x).")
                         ZformApplyWarning(msg)
+                    # Explicit overwrite — no auto _1/_2 suffixing
                     df[col_name] = func(df[xv].to_numpy(), *params)
+
                 except Exception as e:
                     if not silence_warnings:
-                        msg = (f"Failed applying {model} to {xv} ~ {yv}: {e}")
-                        ZformApplyWarning(msg)
+                        ZformApplyWarning(f"Failed applying {model} to {xv} ~ {yv}: {e}")
 
         return df
 

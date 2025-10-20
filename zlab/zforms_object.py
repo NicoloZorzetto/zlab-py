@@ -1,5 +1,11 @@
 """
 zforms_object.py — Object wrapper for zform results.
+
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
 """
 
 from pathlib import Path
@@ -31,11 +37,12 @@ class Zforms:
 
     #  --- DataFrame Delegation ---
     def __getattr__(self, name):
-        """Delegate attribute access to underlying DataFrame unless overridden."""
-        # Only delegate if the attribute is not part of this class
-        if name in self.__dict__ or hasattr(Zforms, name):
-            return self.__dict__[name]
-        return getattr(self.df, name)
+        """Delegate attribute access to the underlying DataFrame unless overridden."""
+        try:
+            return getattr(self.df, name)
+        except AttributeError:
+            raise AttributeError(f"'Zforms' object has no attribute '{name}'")
+
 
     def __getitem__(self, key):
         return self.df[key]
@@ -82,7 +89,7 @@ class Zforms:
         obj = cls(df)
         ok = obj.validate()
         if not ok:
-            ZformWarning("⚠️ Integrity validation failed after import.")
+            ZformWarning("Integrity validation failed after import.")
         return obj
 
     #  --- Representation ---

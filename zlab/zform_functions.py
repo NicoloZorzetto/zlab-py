@@ -18,6 +18,7 @@ except ImportError as e:
     )
     raise ImportError(msg)
 
+from zlab.warnings import ZformRuntimeWarning
 
 # --- Registry of all known zform models ---
 ZFORM_FUNCTIONS = {}
@@ -25,7 +26,14 @@ INIT_GUESS_FUNCS = {}
 
 
 # --- Decorator for registration ---
-def zform_function(name, n_params=None, description=None, init_func=None, bounds=None):
+def zform_function(
+    name,
+    n_params=None,
+    description=None,
+    init_func=None,
+    bounds=None,
+    fixed_params=None,
+):
     """
     Decorator to register a new zform transformation.
 
@@ -42,6 +50,9 @@ def zform_function(name, n_params=None, description=None, init_func=None, bounds
     bounds : tuple[list, list] | None
         Optional (lower_bounds, upper_bounds) for parameters.
         If not provided, wide defaults are used.
+    fixed_params : list[float] | None
+        If provided, defines canonical parameter values for use in
+        `strategy="fixed"`. The model will not be fitted dynamically.
 
     Example
     -------
@@ -54,18 +65,16 @@ def zform_function(name, n_params=None, description=None, init_func=None, bounds
     ...     return a*np.sin(x) + b
     """
     def decorator(func):
-        # --- Register transformation ---
         ZFORM_FUNCTIONS[name] = {
             "func": func,
             "n_params": n_params,
             "description": description,
+            "fixed_params": fixed_params,
         }
 
-        # --- Register init function if provided ---
         if init_func:
             INIT_GUESS_FUNCS[name] = init_func
         else:
-            # Safe fallback initializer: scale + offset or single scale
             def _default_init(x, y):
                 if len(np.shape(x)) == 0:
                     return [1.0]
@@ -75,7 +84,6 @@ def zform_function(name, n_params=None, description=None, init_func=None, bounds
                     return [1.0]
             INIT_GUESS_FUNCS[name] = _default_init
 
-        # --- Register bounds if provided ---
         if bounds:
             BOUNDS_REGISTRY[name] = bounds
 

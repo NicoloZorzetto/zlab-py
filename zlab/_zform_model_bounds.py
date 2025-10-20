@@ -6,7 +6,11 @@ based on model type and data scale. It provides a consistent interface
 for retrieving safe, scale-aware limits that improve optimization
 stability and prevent numerical overflows.
 
-Part of the zlab library by Nicolò Zorzetto.
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
 """
 
 import numpy as np
