@@ -1,5 +1,11 @@
 """
 Custom warning classes for zlab.
+
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
 """
 
 import warnings

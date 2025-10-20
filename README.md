@@ -45,10 +45,10 @@ from zlab import zform
 import seaborn as sbn
 
 df = sbn.load_dataset("penguins").dropna()
-df_out, results = zform(
+df_out, zforms = zform(
     df,
     group_col="species",
-    return_results=True,
+    return_zforms=True,
 	min_obs = 30,
 	apply = True,
 	naming = "standard",
@@ -56,19 +56,8 @@ df_out, results = zform(
     n_jobs=-1
 )
 
-print(results.query('y == "bill_length_mm" and x == "body_mass_g"'))
+print(zforms.summary())
 ```
-
----
-
-## Quick test
-Run the built-in test script:
-
-```bash
-python3 tests/test_zform.py
-```
-
-It automatically loads the penguins dataset, runs zform, and prints the best-fitting models.
 
 ---
 

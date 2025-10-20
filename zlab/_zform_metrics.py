@@ -6,6 +6,12 @@ All metrics must accept (y_true, y_pred, k) and return a scalar score.
 
 Higher-is-better metrics:  r2, adjr2  
 Lower-is-better metrics:   rmse, mae, aic, bic
+
+This module is part of the zlab library by Nicolò Zorzetto.
+
+License
+-------
+GPL v3
 """
 
 import numpy as np

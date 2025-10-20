@@ -40,8 +40,11 @@ except ImportError:
 
 
 from zlab.warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
+from zlab.zform_functions import get_zform_functions, zform_function
 from zlab._zform_metrics import compute_metric, is_higher_better
 from zlab.zform_compute_models import compute_best_model, _fit_pair
+from zlab._zform_metadata import make_metadata, attach_metadata, compute_sha256
+from zlab.zforms_object import Zforms
 
 
 # Use a safe process start method to avoid fork() warnings in Python 3.12+
@@ -50,6 +53,33 @@ try:
 except RuntimeError:
     # The start method can only be set once per session
     pass
+
+
+# --- Transformation argument parser ---
+def _parse_transformations(transformations):
+    custom_funcs = []
+    if transformations is not None:
+        # Normalize to list
+        if callable(transformations):
+            transformations = [transformations]
+
+        # Expand 'default' keyword to all built-ins
+        if any(t == "default" for t in transformations):
+            base = list(get_zform_functions().keys())
+            transformations = [t for t in transformations if t != "default"]
+            transformations = base + transformations
+
+        # Register any callables dynamically
+        for t in transformations:
+            if callable(t):
+                zform_function(t.__name__)(t)
+                custom_funcs.append(t)
+
+    else:
+        # No user-specified transformations → use all defaults
+        transformations = list(get_zform_functions().keys())
+
+    return transformations, custom_funcs
 
 
 # --- Export ---
@@ -103,9 +133,9 @@ def zform(
     verbose=True,
     silence_warnings=False,
 ):
-    """
-    Automatically identifies and optionally applies the best parametric transformations
-    that linearize relationships between variables in a DataFrame.
+       """
+    Automatically identifies, fits, and optionally applies the best parametric
+    transformations that linearize relationships between variables in a DataFrame.
 
     Parameters
     ----------
@@ -113,7 +143,7 @@ def zform(
         Input dataset containing numeric columns.
     y : str | list[str] | None, default=None
         Dependent variable(s). If None, all numeric columns are considered.
-        One y will not be used as x for another unless it is explicitly included in x as well.
+        One y will not be used as x for another unless explicitly included in x.
     x : str | list[str] | None, default=None
         Independent variable(s). If None, all numeric columns are considered.
         If both y and x are None, zform tests all pairwise combinations.
@@ -130,26 +160,28 @@ def zform(
           return a numeric score.
     normalize_metrics : bool, default=False
         When True, evaluation metrics are rescaled to [0, 1] before combining.
-        This helps ensure balanced weighting when combining metrics of
-        different scales or directions.
-    transformations : list[str] | None, default=None
+        Helps balance metrics with different scales or directions.
+    transformations : list[str | callable] | None, default=None
         Subset of transformations to test.
-        Available: {'linear', 'power', 'log_dynamic', 'logistic'}.
-        If None, all are tested.
+        Default: all built-in forms (`['linear', 'power', 'log_dynamic', 'logistic']`).
+        - If a **callable** is passed, it is registered and tested as a custom transformation.
+        - You can include custom functions alongside defaults, e.g.:
+          `[default, my_func]`.
+        - If None, all default transformations are tested.
     min_obs : int, default=10
         Minimum number of valid observations required per (y, x) pair.
     apply : bool, default=False
         If True, applies the best transformations to the DataFrame and returns
-        transformed columns (requires 'Parameters' in fitted forms).
+        transformed columns (requires fitted parameters).
     naming : {'standard', 'compact', 'minimal'}, default='standard'
-        Naming convention for transformed columns when apply=True.
+        Naming convention for transformed columns when `apply=True`.
     export_zforms_to : str | Path | None, default=None
-        Optional export path (.csv, .xlsx, .json, .parquet, etc.) for fitted forms.
+        Optional export path (.csv, .xlsx, .json, .parquet, etc.) for fitted transformations.
     export_zforms_index : bool, default=False
         Whether to include the index when exporting fitted forms.
     return_zforms : bool, default=False
-        If True, returns both the transformed DataFrame and a DataFrame of
-        fitted models and parameters.
+        If True, returns both the transformed DataFrame and a `Zforms` object
+        containing fitted models, parameters, and embedded metadata.
     strategy : {'best', 'fixed'}, default='best'
         Transformation strategy:
           - "best": fits each model’s parameters via nonlinear optimization.
@@ -157,67 +189,71 @@ def zform(
         In "best" mode, zform also reports the gain in R² versus fixed transformations.
     n_jobs : int, default=-1
         Number of parallel processes to use (-1 = all available cores).
+        Automatically reduced to sequential mode when run from a top-level script.
     maxfev : int, default=100000
         Maximum number of function evaluations during optimization.
         Increasing this value can improve convergence at the cost of computation time.
     verbose : bool, default=True
-        If True, prints progress and timing information.
+        If True, prints progress, timing, and summary information.
     silence_warnings : bool, default=False
         If True, suppresses warnings.
 
     Returns
     -------
-    pandas.DataFrame or (pandas.DataFrame, pandas.DataFrame)
-        - If return_zforms=False: the input DataFrame.
-        - If return_zforms=True: a tuple (the input DataFrame, zforms_df), where:
-            zforms_df includes columns:
-                ['y', 'x', 'Group', 'Best Model', 'Best R2', 'Gain_vs_Fixed_R2', 'Parameters']
-        The input DataFrame may be modified if apply=True.
+    pandas.DataFrame or (pandas.DataFrame, Zforms)
+        - If `return_zforms=False`: returns the transformed DataFrame (or original if apply=False).
+        - If `return_zforms=True`: returns a tuple `(df_out, zforms_obj)`, where:
+            * `df_out` is the transformed DataFrame.
+            * `zforms_obj` is a `Zforms` instance containing:
+                - the full fitted forms table
+                - metadata (version, timestamp, hash, and any custom functions)
+                - methods for validation, export, reapplication, and summary display.
 
     Notes
     -----
-    - When `strategy='best'`, parameters are estimated via `scipy.optimize.curve_fit`
-      using dynamically generated starting points.
-    - When `strategy='fixed'`, pre-defined transformations are evaluated directly
-      without optimization.
+    - Fitted results are validated via a SHA256 integrity hash and include
+      metadata about creation time, zlab version, and any registered custom functions.
+    - When exported and re-imported via `Zforms.from_file()`, the hash is checked
+      to ensure the results are unmodified.
     - Grouped fitting and parallel execution are supported.
-    - The “Gain_vs_Fixed” column quantifies improvement over standard functional forms
-      that would be obtained when `strategy='fixed'`.
 
     Examples
     --------
     >>> from zlab import zform
     >>> import pandas as pd
-    >>> df = pd.read_csv('path/to/file.csv')
-    >>> df_out, zforms = zform(
+    >>> df = pd.read_csv("data.csv")
+    >>> df_out, zf = zform(
     ...     df, group_col="species", return_zforms=True,
     ...     strategy="best", apply=True, naming="standard"
     ... )
-    >>> zforms.head()
+    >>> zf.summary()
+    >>> zf.export_to("results.json")
+    >>> zf.validate()
+    True
     """
 
     if silence_warnings:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             return _zform_core(
-                df, y, x, group_col, eval_metric, transformations, min_obs, apply,
-                naming, export_zforms_to, export_zforms_index, return_zforms,
-                strategy, n_jobs, maxfev, verbose
+                df, y, x, group_col, eval_metric, transformations, normalize_metrics,
+                min_obs, apply, naming, export_zforms_to, export_zforms_index,
+                return_zforms, strategy, n_jobs, maxfev, verbose
             )
     else:
         return _zform_core(
-            df, y, x, group_col, eval_metric, transformations, min_obs, apply,
-            naming, export_zforms_to, export_zforms_index, return_zforms,
-            strategy, n_jobs, maxfev, verbose
+            df, y, x, group_col, eval_metric, transformations, normalize_metrics,
+            min_obs, apply, naming, export_zforms_to, export_zforms_index,
+            return_zforms, strategy, n_jobs, maxfev, verbose
         )
 
 
 # --- Zform core ---
 
 def _zform_core(
-    df, y, x, group_col, eval_metric, transformations, min_obs, apply,
-    naming, export_zforms_to, export_zforms_index, return_zforms,
-        strategy, n_jobs, maxfev, verbose
+    df, y, x, group_col, eval_metric, transformations, normalize_metrics,
+    min_obs, apply, naming, export_zforms_to, export_zforms_index,
+    return_zforms, strategy, n_jobs, maxfev, verbose
 ):
     if isinstance(y, str):
         y = [y]
@@ -254,7 +290,12 @@ def _zform_core(
     else:
         y_vars, x_vars = y, x
 
-    # --- setup ---
+    # --- Setup transformations ---
+
+    transformations, custom_funcs = _parse_transformations(transformations)
+    
+    # --- Comp setup ---
+    
     groups = [("All Data", df)] if group_col is None else df.groupby(group_col)
     zforms = defaultdict(dict)
 
@@ -364,6 +405,12 @@ def _zform_core(
     if len(zforms_df.get("Group", pd.Series()).dropna().unique()) <= 1:
         zforms_df = zforms_df.drop(columns=["Group"], errors="ignore")
 
+    # Add metadata for future use, reference and validation
+    metadata = make_metadata(custom_funcs)
+    metadata["sha256"] = compute_sha256(zforms_df)
+    zforms_df = attach_metadata(zforms_df, metadata)
+    zforms = Zforms(zforms_df)
+        
     if verbose:
         console.print(
             f"Computation completed over {total_specs:,} specifications × "
@@ -378,9 +425,9 @@ def _zform_core(
             from .zform_apply import zform_apply
         except ImportError:
             from zform_apply import zform_apply
-        df = zform_apply(df, zforms_df, naming=naming)
+        df = zform_apply(df, zforms, naming=naming)
 
     if export_zforms_to:
-        export_zforms(zforms_df, export_zforms_to)
+        export_zforms(zforms, export_zforms_to)
 
-    return (df, zforms_df) if return_zforms else df
+    return (df, zforms) if return_zforms else df
