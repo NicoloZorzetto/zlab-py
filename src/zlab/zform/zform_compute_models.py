@@ -21,12 +21,12 @@ except ImportError as e:
     )
     raise ImportError(msg)
 
-from zlab._zform_config import ZformConfig
-from zlab._zform_metrics import (
+from ._zform_config import ZformConfig
+from ._zform_metrics import (
     compute_metric, compute_multi_metrics, compute_composite_score, is_higher_better)
-from zlab._zform_model_defaults import FIXED_DEFAULTS
-from zlab.zform_functions import get_zform_functions, guess_initial_params
-from zlab._zform_model_bounds import get_model_bounds
+from ._zform_model_defaults import FIXED_DEFAULTS
+from .zform_functions import get_zform_functions, guess_initial_params
+from ._zform_model_bounds import get_model_bounds
 
 
 def compute_best_model(

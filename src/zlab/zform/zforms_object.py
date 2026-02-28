@@ -11,8 +11,8 @@ GPL v3
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from zlab._zform_metadata import extract_metadata
-from zlab.zforms_behaviors import (
+from ._zform_metadata import extract_metadata
+from .zforms_behaviors import (
     apply_zforms,
     export_zforms,
     import_zforms,

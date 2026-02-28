@@ -11,8 +11,8 @@ GPL v3
 from pathlib import Path
 import pandas as pd
 
-from zlab._zform_metadata import extract_metadata, attach_metadata, compute_sha256
-from zlab.zform_apply import _zform_apply
+from ._zform_metadata import extract_metadata, attach_metadata, compute_sha256
+from .zform_apply import _zform_apply
 from zlab.warnings import ZformRuntimeWarning, ZformExportWarning
 
 

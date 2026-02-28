@@ -39,12 +39,12 @@ except ImportError:
     console = None
 
 
-from zlab.warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
-from zlab._zform_config import ZformConfig
-from zlab.zform_functions import get_zform_functions, zform_function
-from zlab.zform_compute_models import _fit_pair
-from zlab._zform_metadata import make_metadata, attach_metadata, compute_sha256
-from zlab.zforms_object import Zforms
+from .warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
+from ._zform_config import ZformConfig
+from .zform_functions import get_zform_functions, zform_function
+from .zform_compute_models import _fit_pair
+from ._zform_metadata import make_metadata, attach_metadata, compute_sha256
+from .zforms_object import Zforms
 
 
 # Use a safe process start method to avoid fork() warnings in Python 3.12+

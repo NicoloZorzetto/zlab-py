@@ -29,7 +29,7 @@ except ImportError:
 
 
 from zlab.warnings import ZformApplyWarning
-from zlab.zform_functions import get_zform_functions, zform_function
+from .zform_functions import get_zform_functions, zform_function
 from zlab._zform_metadata import extract_metadata
 
 
