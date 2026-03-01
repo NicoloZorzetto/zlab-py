@@ -1,7 +1,21 @@
+# python cache
 __pycache__/
 *.pyc
 *.pyo
+
+# packaging
+*.egg-info/
+build/
+dist/
+
+# virtual environments
+.venv/
+venv/
+env/
+
+# macOS
 .DS_Store
+
+# IDEs
 .idea/
 .vscode/
-
