@@ -123,7 +123,6 @@ def zform(
     naming="standard",
     export_zforms_to=None,
     export_zforms_index=False,
-    return_zforms=True,
     verbose=True,
     silence_warnings=False,
     config: ZformConfig | None = None,
@@ -179,10 +178,6 @@ def zform(
         Optional export path (.csv, .xlsx, .json, .parquet, etc.) for fitted transformations.
     export_zforms_index : bool, default=False
         Whether to include the index when exporting fitted forms.
-    return_zforms : bool, default=True
-        If True, returns both a `Zforms` object and the (optionally) transformed input DataFrame.
-        The `Zforms` contains fitted models, parameters, and embedded metadata.
-        If False, returns just the (optionally) transformed input DataFrame.
     strategy : {'best', 'fixed'}, default='best'
         Transformation strategy:
           - "best": fits each model’s parameters via nonlinear optimization.
@@ -201,14 +196,15 @@ def zform(
 
     Returns
     -------
-    (Zforms, pandas.DataFrame) or pandas.DataFrame 
-        - If `return_zforms=True`: returns a tuple `(zforms_obj, df_out)`, where:
+    Zforms or (pandas.DataFrame, Zforms)
+        Returns the fitted `Zforms` object and optionally the transformed DataFrame:
+          - When `apply=False` -> `zforms_obj`
+          - When `apply=True` -> `(df_out, zforms_obj)`
             * `zforms_obj` is a `Zforms` instance containing:
                 - the full fitted forms table
                 - metadata (version, timestamp, hash, and any custom functions)
                 - methods for validation, export, reapplication, and summary display.
             * `df_out` is the transformed DataFrame.
-        - If `return_zforms=False`: returns the transformed DataFrame (or original if apply=False).
 
     Notes
     -----
@@ -225,7 +221,7 @@ def zform(
     >>> import pandas as pd
     >>> df = pd.read_csv("data.csv")
     >>> zf = zform(
-    ...     df, group_col="species", return_zforms=True,
+    ...     df, group_col="species",
     ...     strategy="best"
     ... )
     >>> zf.summary()
@@ -237,9 +233,9 @@ def zform(
     >>> from zlab import zform
     >>> import pandas as pd
     >>> df = pd.read_csv("data.csv")
-    >>> zf, df_out = zform(
-    ...     df, group_col="species", return_zforms=True,
-    ...     strategy="best", apply=True, naming="standard"
+    >>> df_out, zf = zform(
+    ...     df, group_col="species", strategy="best",
+    ...     apply=True, naming="standard"
     ... )
     >>> zf.summary()
     >>> zf.export_to("results.json")
@@ -461,4 +457,6 @@ def _zform_core(
     if export_zforms_to:
         zforms.export_to(export_zforms_to)
 
-    return (zforms, df) if return_zforms else df
+    if apply:
+        return df, zforms
+    return zforms

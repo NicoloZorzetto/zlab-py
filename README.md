@@ -48,7 +48,6 @@ df = sbn.load_dataset("penguins").dropna()
 df_out, zforms = zform(
     df,
     group_col="species",
-    return_zforms=True,
 	min_obs = 30,
 	apply = True,
 	naming = "standard",
