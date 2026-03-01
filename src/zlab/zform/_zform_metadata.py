@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 import pandas as pd
 # from zlab import __version__
-from zlab.zform_functions import get_zform_functions
+from .zform_functions import get_zform_functions
 
 
 def make_metadata(custom_funcs=None):

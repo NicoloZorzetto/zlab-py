@@ -30,7 +30,7 @@ except ImportError:
 
 from zlab.warnings import ZformApplyWarning
 from .zform_functions import get_zform_functions, zform_function
-from zlab._zform_metadata import extract_metadata
+from ._zform_metadata import extract_metadata
 
 
 def _zform_apply(

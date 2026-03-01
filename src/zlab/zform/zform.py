@@ -39,7 +39,7 @@ except ImportError:
     console = None
 
 
-from .warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
+from zlab.warnings import ZformWarning, ZformExportWarning, ZformRuntimeWarning
 from ._zform_config import ZformConfig
 from .zform_functions import get_zform_functions, zform_function
 from .zform_compute_models import _fit_pair
