@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*", "docs*", "examples*"]
+
+[project]
+name = "zlab"
+version = "0.0.1.dev0"
+authors = [
+  { name = "Nicolò Zorzetto", email = "nicolozorzetto@protonmail.com" },
+]
+description = "Parametric transformation and linearization toolkit."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-only" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "numpy>=1.23",
+  "pandas>=1.5",
+  "scipy>=1.9",
+]
+
+[project.optional-dependencies]
+cli = ["rich>=13"]
+io = [
+  "openpyxl>=3.1",  # Excel export
+  "pyarrow>=10",    # Parquet export
+  "tabulate>=0.9",  # Markdown export via pandas.to_markdown
+]
+test = [
+  "pytest>=7",
+  "pytest-cov>=4",
+  "seaborn>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/NicoloZorzetto/zlab-py"
+Issues = "https://github.com/NicoloZorzetto/zlab-py/issues"
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/zlab --cov-report=term-missing"
