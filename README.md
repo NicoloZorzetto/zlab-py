@@ -60,6 +60,32 @@ print(zforms.summary())
 
 ---
 
+# Dataset Credits
+
+This package includes copies of the following datasets, under `src/zlab/datasets/`, used for testing and examples. The datasets are redistributed under their original terms; no modifications were made.
+
+## Iris Dataset
+
+Fisher, R. A. (1936). *The use of multiple measurements in taxonomic problems*. *Annals of Eugenics*, 7(2), 179–188.
+
+A widely used copy is available via the UCI Machine Learning Repository:
+https://archive.ics.uci.edu/dataset/53/iris
+
+The data is in the public domain; no license restrictions apply.
+
+## Palmer Penguins Dataset
+
+Gorman KB, Williams TD, Fraser WR (2014). *Ecological Sexual Dimorphism and Environmental Variability within a Community of Antarctic Penguins (Genus Pygoscelis)*. *PLOS ONE*, 9(3), e90081.
+https://doi.org/10.1371/journal.pone.0090081
+
+Commonly cited via the `palmerpenguins` R package:
+https://allisonhorst.github.io/palmerpenguins/
+
+Released under CC0 1.0 (Public Domain):
+https://creativecommons.org/publicdomain/zero/1.0/
+
+---
+
 # License
 GPL v3 — see LICENSE for details.
 

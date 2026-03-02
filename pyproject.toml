@@ -29,6 +29,9 @@ dependencies = [
   "scipy>=1.9",
 ]
 
+[tool.setuptools.package-data]
+"zlab.datasets" = ["data/*.csv"]
+
 [project.optional-dependencies]
 cli = ["rich>=13"]
 io = [
