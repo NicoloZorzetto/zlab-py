@@ -56,7 +56,6 @@ def try_zform_penguins():
     df_out, forms = zform(
         df,
         group_col="species",
-        return_results=True,
 	    min_obs = 10,
 	    apply = True,
 	    naming = "standard",

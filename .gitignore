@@ -3,6 +3,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# pytest
+.coverage
+.coverage.*
+htmlcov/
+
 # packaging
 *.egg-info/
 build/

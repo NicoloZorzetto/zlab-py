@@ -260,14 +260,14 @@ def zform(
             return _zform_core(
                 df, y, x, group_col, transformations,
                 apply, naming, export_zforms_to, export_zforms_index,
-                return_zforms, verbose, config
+                verbose, config
             )
 
     else:
         return _zform_core(
             df, y, x, group_col, transformations,
             apply, naming, export_zforms_to, export_zforms_index,
-            return_zforms, verbose, config
+            verbose, config
         )
 
 
@@ -276,7 +276,7 @@ def zform(
 def _zform_core(
     df, y, x, group_col, transformations,
     apply, naming, export_zforms_to, export_zforms_index,
-    return_zforms, verbose, config: ZformConfig
+    verbose, config: ZformConfig
 ):
     if isinstance(y, str):
         y = [y]
@@ -443,13 +443,17 @@ def _zform_core(
     zforms = Zforms(zforms_df)
         
     if verbose:
-        console.print(
+        msg = (
             f"Computation completed over {total_specs:,} specifications × "
             f"{n_transforms} transformations.\n"
             f"Total function evaluations: {total_iterations:,}\n"
             f"Elapsed time: {format_time(elapsed)}\n"
             f"Used {cores_used} core{'s' if cores_used > 1 else ''}.\n"
         )
+        if RICH_AVAILABLE:
+            console.print(msg)
+        else:
+            print(msg)
 
     if apply:
         df = zforms.apply(df, naming=naming, y=y, x=x, group_col=group_col, verbose=verbose)
