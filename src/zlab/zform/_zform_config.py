@@ -11,6 +11,8 @@ GPL v3
 from dataclasses import dataclass, asdict
 from typing import Callable
 
+from zlab.warnings import ZformRuntimeWarning
+
 @dataclass
 class ZformConfig:
     """
@@ -37,6 +39,11 @@ class ZformConfig:
             raise ValueError("maxfev must be a positive integer.")
         if not isinstance(self.n_jobs, int):
             raise ValueError("n_jobs must be an integer.")
+        if self.n_jobs < -1:
+            raise ValueError("n_jobs must be -1 (all cores), 1, or a positive integer.")
+        if self.n_jobs == 0:
+            self.n_jobs = 1
+            ZformRuntimeWarning("n_jobs cannot be set to 0. Coercing n_jobs=1.")
         if isinstance(self.eval_metric, str) and not self.eval_metric:
             raise ValueError("eval_metric cannot be an empty string.")
 

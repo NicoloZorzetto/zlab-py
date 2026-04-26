@@ -63,7 +63,7 @@ def compute_best_model(
 
     # --- Strategy: fixed ---
     if config.strategy == "fixed":
-        from zlab.zform_functions import ZFORM_FUNCTIONS  # local import to avoid circulars
+        from .zform_functions import ZFORM_FUNCTIONS  # local import to avoid circulars
         for name, func in TRANSFORMATIONS.items():
             # Skip invalid domains
             if "log" in name and np.any(x <= -1):

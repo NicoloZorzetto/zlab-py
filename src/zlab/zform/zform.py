@@ -11,11 +11,12 @@ GPL v3
 """
 
 import __main__
+import sys
 import warnings
 import time
 import multiprocessing
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
@@ -48,11 +49,12 @@ from .zforms_object import Zforms
 
 
 # Use a safe process start method to avoid fork() warnings in Python 3.12+
-try:
-    multiprocessing.set_start_method("forkserver", force=True)
-except RuntimeError:
-    # The start method can only be set once per session
-    pass
+if sys.platform != "win32":
+    try:
+        multiprocessing.set_start_method("forkserver", force=True)
+    except RuntimeError:
+        # The start method can only be set once per session
+        pass
 
 
 # --- Transformation argument parser ---
@@ -80,6 +82,42 @@ def _parse_transformations(transformations):
         transformations = list(get_zform_functions().keys())
 
     return transformations, custom_funcs
+
+
+# --- Multisystem multithreading support ---
+
+def _in_interactive_session() -> bool:
+    # No __main__.__file__ in notebooks/REPL, so treat as interactive
+    return not getattr(__main__, "__file__", None)
+
+
+def _has_dynamic_funcs(custom_funcs) -> bool:
+    # Anything defined in __main__ or with a <locals> qualname is not safely pickleable
+    for f in custom_funcs or []:
+        if getattr(f, "__module__", "") == "__main__":
+            return True
+        if "<locals>" in getattr(f, "__qualname__", ""):
+            return True
+        if getattr(f, "__name__", "") == "<lambda>":
+            return True
+    return False
+
+
+def _select_executor(custom_funcs, n_jobs, *, extra_callables=None):
+    """
+    Return (ExecutorClass, reason_string) based on portability/pickling constraints.
+    Threads are chosen when user-defined functions are present or in interactive contexts.
+    """
+    if n_jobs in (None, 1):
+        return None, "sequential"
+
+    extra_callables = extra_callables or []
+    dynamic = _has_dynamic_funcs(custom_funcs) or _has_dynamic_funcs(extra_callables)
+
+    if dynamic or _in_interactive_session() or sys.platform.startswith("win"):
+        return ThreadPoolExecutor, "threads (dynamic funcs / interactive / Windows)"
+
+    return ProcessPoolExecutor, "processes"
 
 
 # --- Export ---
@@ -339,37 +377,42 @@ def _zform_core(
         else:
             print(f"\nComputing optimal forms for "
                   f"{len(y_vars)} Y × {len(x_vars)} X combinations...\n")
-
-    # --- SAFETY: disable parallel mode when run from a top-level script ---
-    if getattr(__main__, "__file__", None) and __main__.__file__.endswith(".py"):
-        if config.n_jobs != 1:
-            msg = ("Running from a top-level script — parallel mode disabled")
-            ZformWarning(msg)
-            config.n_jobs = 1
                 
     # --- execution ---
     start_time = time.time()
 
-    if config.n_jobs and config.n_jobs != 1:
-        max_workers = None if config.n_jobs == -1 else config.n_jobs
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+    ExecutorClass, backend_reason = _select_executor(
+      custom_funcs,
+      config.n_jobs,
+      extra_callables=[config.eval_metric],
+    )
+    max_workers = None if config.n_jobs == -1 else config.n_jobs
+
+    if ExecutorClass is not None:
+        with ExecutorClass(max_workers=max_workers) as ex:
             futures = [ex.submit(_fit_pair, j, config) for j in jobs]
 
             if verbose and RICH_AVAILABLE:
                 with Progress(console=console) as progress:
-                    task = progress.add_task(f"[cyan]Fitting models...", total=len(futures))
+                    task = progress.add_task(
+                        "[cyan]Fitting transformations...", total=len(futures)
+                    )
                     zforms_list = []
                     for f in as_completed(futures):
                         zforms_list.append(f.result())
                         progress.advance(task)
             else:
                 if verbose:
-                    print(f"Computing {len(futures)} pairwise transformations...")
+                    print(
+                        f"Computing {len(futures)} pairwise transformations in {backend_reason}..."
+                    )
                 zforms_list = [f.result() for f in as_completed(futures)]
     else:
         if verbose and RICH_AVAILABLE:
             with Progress(console=console) as progress:
-                task = progress.add_task(f"[cyan]Fitting models (sequential)...", total=len(jobs))
+                task = progress.add_task(
+                    "[cyan]Fitting transformations (sequential)...", total=len(jobs)
+                )
                 zforms_list = []
                 for j in jobs:
                     zforms_list.append(_fit_pair(j, config=config))
