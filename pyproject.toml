@@ -27,6 +27,7 @@ dependencies = [
   "numpy>=1.23",
   "pandas>=1.5",
   "scipy>=1.9",
+  "scikit-learn>=1.1"
 ]
 
 [tool.setuptools.package-data]

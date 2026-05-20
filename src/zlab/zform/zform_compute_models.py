@@ -23,7 +23,12 @@ except ImportError as e:
 
 from ._zform_config import ZformConfig
 from ._zform_metrics import (
-    compute_metric, compute_multi_metrics, compute_composite_score, is_higher_better)
+    compute_metric,
+    compute_multi_metrics,
+    compute_composite_score,
+    is_higher_better,
+)
+from ._zform_eval_engines import evaluate_engine
 from ._zform_model_defaults import FIXED_DEFAULTS
 from .zform_functions import get_zform_functions, guess_initial_params
 from ._zform_model_bounds import get_model_bounds
@@ -64,6 +69,7 @@ def compute_best_model(
     # --- Strategy: fixed ---
     if config.strategy == "fixed":
         from .zform_functions import ZFORM_FUNCTIONS  # local import to avoid circulars
+
         for name, func in TRANSFORMATIONS.items():
             # Skip invalid domains
             if "log" in name and np.any(x <= -1):
@@ -87,11 +93,13 @@ def compute_best_model(
 
             try:
                 # Apply directly (no optimization)
-                y_pred = func(x, *p)
+                z = func(x, *p)
+                y_pred, _ = evaluate_engine(z, y, config.engine, **config.engine_kwargs)
                 k = 2 + (len(p) if config.penalize_theta_in_ic else 0)
                 metrics = compute_multi_metrics(config.eval_metric, y, y_pred, k=k)
-                score = compute_composite_score(metrics, config.eval_metric,
-                                                normalize=config.normalize_metrics)
+                score = compute_composite_score(
+                    metrics, config.eval_metric, normalize=config.normalize_metrics
+                )
                 zforms[name] = {"score": score, "metrics": metrics, "params": p}
             except Exception:
                 continue
@@ -102,7 +110,6 @@ def compute_best_model(
 
         best = max(valid, key=lambda k: valid[k]["score"])
         return best, round(valid[best]["score"], 3), valid[best]["params"], None, 0
-
 
     # --- Strategy: best ---
     for name, func in TRANSFORMATIONS.items():
@@ -120,20 +127,27 @@ def compute_best_model(
                     warnings.simplefilter("ignore", category=RuntimeWarning)
                     warnings.simplefilter("ignore", category=OptimizeWarning)
                     popt, _, infodict, _, _ = curve_fit(
-                        func, x, y,
-                        p0=np.array(p0) * (1 + np.random.uniform(-0.1, 0.1, len(p0)))
-                        if attempt == 1 else p0,
+                        func,
+                        x,
+                        y,
+                        p0=(
+                            np.array(p0) * (1 + np.random.uniform(-0.1, 0.1, len(p0)))
+                            if attempt == 1
+                            else p0
+                        ),
                         bounds=bounds,
                         maxfev=config.maxfev,
                         method="trf",
                         full_output=True,
                     )
                 total_iters += infodict.get("nfev", 0)
-                y_pred = func(x, *popt)
+                z = func(x, *popt)
+                y_pred, _ = evaluate_engine(z, y, config.engine, **config.engine_kwargs)
                 k = 2 + (len(popt) if config.penalize_theta_in_ic else 0)
                 metrics = compute_multi_metrics(config.eval_metric, y, y_pred, k=k)
-                score = compute_composite_score(metrics, config.eval_metric,
-                                                normalize=config.normalize_metrics)
+                score = compute_composite_score(
+                    metrics, config.eval_metric, normalize=config.normalize_metrics
+                )
                 zforms[name] = {"score": score, "metrics": metrics, "params": popt}
                 break
             except Exception:
@@ -154,7 +168,8 @@ def compute_best_model(
         try:
             if "log" in name and np.any(x <= -1):
                 continue
-            y_pred = func(x, *p)
+            z = func(x, *p)
+            y_pred, _ = evaluate_engine(z, y, config.engine, **config.engine_kwargs)
             k = 2 + (len(p) if config.penalize_theta_in_ic else 0)
             score = compute_metric(config.eval_metric, y, y_pred, k=k)
             fixed_scores[name] = score
