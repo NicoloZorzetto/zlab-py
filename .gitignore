@@ -2,12 +2,14 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
 # pytest
 .coverage
 .coverage.*
 htmlcov/
 .pytest_cache/
+pytest-of-*/
 
 # packaging
 *.egg-info/
