@@ -1,6 +1,6 @@
 """
 Custom warning helpers for zlab.
- 
+
 This module is part of the zlab library by Nicolò Zorzetto.
 
 License
@@ -15,6 +15,7 @@ from .warnings import (
     ZformExportWarning,
     ZformRuntimeWarning,
     ZformApplyWarning,
+    ZformFunctionWarning,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "ZformExportWarning",
     "ZformRuntimeWarning",
     "ZformApplyWarning",
+    "ZformFunctionWarning",
 ]

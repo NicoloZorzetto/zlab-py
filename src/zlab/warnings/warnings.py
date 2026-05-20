@@ -10,22 +10,18 @@ GPL v3
 
 import warnings
 import inspect
-import os
+from pathlib import Path
+
+_PKG_DIR = str(Path(__file__).resolve().parents[1])
 
 
 def find_stacklevel():
     """Return the first stacklevel outside zlab internals."""
-    try:
-        import zlab
-        pkg_dir = os.path.dirname(zlab.__file__)
-    except Exception:
-        return 2  # fallback if zlab not yet importable
-
     frame = inspect.currentframe()
     level = 1
     while frame:
         filename = frame.f_code.co_filename
-        if not filename.startswith(pkg_dir):
+        if not filename.startswith(_PKG_DIR):
             break
         frame = frame.f_back
         level += 1
@@ -34,6 +30,7 @@ def find_stacklevel():
 
 class ZlabWarning(Warning):
     """Base warning class for all zlab warnings."""
+
     default_stacklevel = 2
     _emitting = False  # recursion guard
 
@@ -43,9 +40,7 @@ class ZlabWarning(Warning):
             self.__class__._emitting = True
             try:
                 warnings.warn(
-                    message,
-                    self.__class__,
-                    stacklevel=stacklevel or find_stacklevel()
+                    message, self.__class__, stacklevel=stacklevel or find_stacklevel()
                 )
             finally:
                 self.__class__._emitting = False
@@ -66,3 +61,7 @@ class ZformRuntimeWarning(ZformWarning):
 
 class ZformApplyWarning(ZformWarning):
     """Warning raised when a transformation cannot be applied (e.g. missing forms)."""
+
+
+class ZformFunctionWarning(ZformWarning):
+    """Warning for custom function registration collisions."""
