@@ -93,22 +93,23 @@ def validate_zforms(df: pd.DataFrame, metadata: dict) -> bool:
         ZformRuntimeWarning("No SHA256 stored in metadata; cannot validate integrity.")
         return False
 
-    current_hash = compute_sha256(df.drop(columns=["__zform_metadata__"], errors="ignore"))
+    current_hash = compute_sha256(
+        df.drop(columns=["__zform_metadata__"], errors="ignore")
+    )
     valid = stored_hash == current_hash
 
     if not valid:
-        ZformRuntimeWarning("zforms integrity validation failed — data mismatch detected.")
+        raise ValueError("zforms integrity validation failed — data mismatch detected.")
 
     # Also check that user-defined functions metadata exist
     custom_funcs = metadata.get("custom_functions", [])
     if not isinstance(custom_funcs, list):
-        raise ValueError(
-            "Invalid or missing custom function metadata."
-        )
+        raise ValueError("Invalid or missing custom function metadata.")
 
     custom_funcs = metadata.get("custom_functions", {})
     if not isinstance(custom_funcs, (list, dict)):
-        ZformRuntimeWarning("Unexpected custom_functions metadata type; continuing without strict check.")
-
+        ZformRuntimeWarning(
+            "Unexpected custom_functions metadata type; continuing without strict check."
+        )
 
     return valid

@@ -1,5 +1,5 @@
 """
-Tests or Zforms metadata helper behavior.
+Tests for Zforms metadata helper behavior.
 
 Run with:
   pytest tests/zform/unit/test_behaviors.py
