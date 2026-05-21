@@ -75,17 +75,3 @@ def test_compute_composite_score_allows_negative_infinity():
     )
 
     assert score == -np.inf
-
-
-def test_compute_composite_score_allows_negative_infinity():
-    def combine(metrics):
-        return metrics["r2"] - 0.1 * metrics["aic"]
-
-    score = compute_composite_score(
-        {"r2": 1.0, "aic": np.inf},
-        ["r2", "aic"],
-        composite_metric_func=combine,
-    )
-
-    assert score == -np.inf
-

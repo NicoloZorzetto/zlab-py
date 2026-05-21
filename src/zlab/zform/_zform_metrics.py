@@ -201,11 +201,11 @@ def compute_composite_score(
     normalize_method: {'minmax', 'zscore'}
     """
     if composite_metric_func is not None:
-    try:
-        return float(composite_metric_func(metrics_dict))
-    except (TypeError, ValueError, FloatingPointError, ZeroDivisionError):
-        ZformWarning(f"{exc} raised during composite metric computation.")
-        return np.nan
+        try:
+            return float(composite_metric_func(metrics_dict))
+        except Exception as exc:
+            ZformWarning(f"{exc} raised during composite metric computation.")
+            return np.nan
 
     if callable(eval_metric):
         return metrics_dict.get("custom", np.nan)
