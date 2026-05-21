@@ -98,7 +98,10 @@ def compute_best_model(
                 k = 2 + (len(p) if config.penalize_theta_in_ic else 0)
                 metrics = compute_multi_metrics(config.eval_metric, y, y_pred, k=k)
                 score = compute_composite_score(
-                    metrics, config.eval_metric, normalize=config.normalize_metrics
+                    metrics,
+                    config.eval_metric,
+                    normalize=config.normalize_metrics,
+                    composite_metric_func=config.composite_metric_func,
                 )
                 zforms[name] = {"score": score, "metrics": metrics, "params": p}
             except Exception:
@@ -146,7 +149,10 @@ def compute_best_model(
                 k = 2 + (len(popt) if config.penalize_theta_in_ic else 0)
                 metrics = compute_multi_metrics(config.eval_metric, y, y_pred, k=k)
                 score = compute_composite_score(
-                    metrics, config.eval_metric, normalize=config.normalize_metrics
+                    metrics,
+                    config.eval_metric,
+                    normalize=config.normalize_metrics,
+                    composite_metric_func=config.composite_metric_func,
                 )
                 zforms[name] = {"score": score, "metrics": metrics, "params": popt}
                 break

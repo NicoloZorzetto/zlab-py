@@ -185,7 +185,13 @@ def compute_multi_metrics(eval_metric, y_true, y_pred, k=0):
     )
 
 
-def compute_composite_score(metrics_dict, eval_metric, normalize=False, normalize_method="minmax"):
+def compute_composite_score(
+        metrics_dict,
+        eval_metric,
+        normalize=False,
+        normalize_method="minmax",
+        composite_metric_func=None,
+):
     """
     Combine multiple metric scores into a composite score.
 
@@ -194,6 +200,15 @@ def compute_composite_score(metrics_dict, eval_metric, normalize=False, normaliz
     normalize: bool
     normalize_method: {'minmax', 'zscore'}
     """
+    if composite_metric_func is not None:
+    try:
+        return float(composite_metric_func(metrics_dict))
+    except (TypeError, ValueError, FloatingPointError, ZeroDivisionError):
+        ZformWarning(f"{exc} raised during composite metric computation.")
+        return np.nan
+
+    if callable(eval_metric):
+        return metrics_dict.get("custom", np.nan)
     
     # --- prepare metrics & weights ---
     if isinstance(eval_metric, str):
