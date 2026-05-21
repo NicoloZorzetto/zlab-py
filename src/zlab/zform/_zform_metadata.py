@@ -11,8 +11,10 @@ GPL v3
 import hashlib
 import json
 from datetime import datetime
+
+import numpy as np
 import pandas as pd
-# from zlab import __version__
+
 from .zform_functions import get_zform_functions
 
 
@@ -29,7 +31,8 @@ def make_metadata(custom_funcs=None):
             {
                 "name": f.__name__,
                 "source": getattr(f, "__source__", None)
-                or getattr(f, "__doc__", "") or "lambda",
+                or getattr(f, "__doc__", "")
+                or "lambda",
             }
             for f in custom_funcs
         ],
@@ -60,15 +63,20 @@ def extract_metadata(df: pd.DataFrame):
     return None
 
 
-
 def compute_sha256(df: pd.DataFrame) -> str:
-    """Compute a stable SHA256 hash for a DataFrame, ignoring dtype and index noise."""
-    # Sort columns and rows for consistent ordering
-    df_sorted = df.sort_index(axis=1).sort_values(list(df.columns), axis=0, ignore_index=True)
-    
-    # Convert all floats to consistent string precision
-    df_normalized = df_sorted.round(8).astype(str)
-    
-    # Serialize deterministically
-    data_bytes = df_normalized.to_csv(index=False).encode("utf-8")
-    return hashlib.sha256(data_bytes).hexdigest()
+    """Compute a deterministic SHA256 hash for Zforms data."""
+    df_no_meta = df.drop(columns=["__zform_metadata__"], errors="ignore").copy()
+    df_no_meta = df_no_meta.reindex(sorted(df_no_meta.columns), axis=1)
+
+    for col in df_no_meta.select_dtypes(include=[np.number]).columns:
+        df_no_meta[col] = df_no_meta[col].astype(float).round(10)
+
+    df_normalized = df_no_meta.fillna("NaN").astype(str)
+
+    canonical = json.dumps(
+        df_normalized.to_dict(orient="records"),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
