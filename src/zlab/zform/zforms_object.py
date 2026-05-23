@@ -43,7 +43,6 @@ class Zforms:
         except AttributeError:
             raise AttributeError(f"'Zforms' object has no attribute '{name}'")
 
-
     def __getitem__(self, key):
         return self.df[key]
 
@@ -63,7 +62,7 @@ class Zforms:
         """Print basic summary stats about the fitted transformations."""
         print(f"\nZforms Summary:")
         print(f"  • Records: {len(self.df)}")
-        print(f"  • Unique models: {self.df['Best Model'].nunique()}")
+        print(f"  • Unique models: {self.df['Best Transformation'].nunique()}")
 
         best_cols = [c for c in self.df.columns if c.lower().startswith("best")]
         for c in best_cols:

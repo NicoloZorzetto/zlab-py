@@ -1,6 +1,6 @@
 """
 Transformation functions and parameter initialization
-for zform models.
+for zform functions.
 
 This module is part of the zlab library by Nicolò Zorzetto.
 
@@ -9,20 +9,61 @@ License
 GPL v3
 """
 
-try:
-    import numpy as np
-except ImportError as e:
-    msg = (
-        f"Missing dependency: {e.name}. Please install all requirements via "
-        "'pip install -r requirements.txt'"
-    )
-    raise ImportError(msg)
+import numpy as np
 
 from zlab.warnings import ZformRuntimeWarning
+from zlab.zform._zform_functions_bounds import (
+    SQRT_MAX_FLOAT,
+    MIN_LOG_BASE,
+    MIN_POS_FLOAT,
+    MIN_EXP_ARGUMENT,
+    MAX_EXP_ARGUMENT,
+    MAX_EXP_K,
+    MIN_EXP_K,
+)
 
-# --- Registry of all known zform models ---
+
+# --- Registration helpers ---
+def snapshot_zform_functions(names: list[str]) -> dict[str, dict]:
+    """Return a shallow copy of registry entries for the requested names."""
+    snapshot = {}
+    for name in names:
+        entry = ZFORM_FUNCTIONS.get(name)
+        if entry:
+            snapshot[name] = {
+                "func": entry["func"],
+                "n_params": entry.get("n_params"),
+                "description": entry.get("description"),
+                "fixed_params": entry.get("fixed_params"),
+                "bounds": entry.get("bounds"),
+                "init_func": entry.get("init_func"),
+                "requires_positive_x": entry.get("requires_positive_x"),  # add this
+            }
+    return snapshot
+
+
+def ensure_zform_functions(snapshot: dict[str, dict]):
+    """Restore registry entries from previously captured snapshot."""
+    for name, entry in snapshot.items():
+        ZFORM_FUNCTIONS[name] = entry
+
+
+# --- Default class for initialization of customs ---
+class _DefaultInit:
+    """Pickle-safe default initializer for custom transforms."""
+
+    def __init__(self, n_params=None):
+        self.n_params = n_params or 1
+
+    def __call__(self, x, y):
+        return [1.0] * self.n_params
+
+
+# --- Registry of all known zform functions ---
 ZFORM_FUNCTIONS = {}
-INIT_GUESS_FUNCS = {}
+
+# --- Registry for local zform functions ---
+LOCAL_ZFORM_FUNCTIONS = {}
 
 
 # --- Decorator for registration ---
@@ -33,6 +74,8 @@ def zform_function(
     init_func=None,
     bounds=None,
     fixed_params=None,
+    register=False,
+    requires_positive_x=False,
 ):
     """
     Decorator to register a new zform transformation.
@@ -40,52 +83,67 @@ def zform_function(
     Parameters
     ----------
     name : str
-        Unique name of the transformation (e.g. "linear", "power").
-    n_params : int, optional
-        Number of parameters (for reference/documentation).
-    description : str, optional
-        Short human-readable description.
-    init_func : callable, optional
-        Optional initialization function: init_func(x, y) -> list of params.
-    bounds : tuple[list, list] | None
-        Optional (lower_bounds, upper_bounds) for parameters.
-        If not provided, wide defaults are used.
-    fixed_params : list[float] | None
-        If provided, defines canonical parameter values for use in
-        `strategy="fixed"`. The model will not be fitted dynamically.
+        Transformation name used in registry.
+    n_params : int | None
+        Number of free parameters (0 for parameter-free forms).
+    description : str | None
+        Human-readable description.
+    init_func : callable | None
+        Initializer (x, y) -> list/tuple of starting params; defaults to `fixed_params` if `None`.
+        Lambdas/closures work but may not serialize safely; prefer named, module-level functions
+        for export/import and pull-from-export.
+    bounds : tuple[list|tuple, list|tuple] | None
+        Parameter bounds (lower, upper) for curve fitting.
+    fixed_params : list | tuple | None
+        Canonical parameter set for `strategy="fixed"`.
+    register : bool
+        If True, immediately register in the global registry; otherwise only define locally.
+    requires_positive_x : bool | callable
+        If True, skip when x has nonpositive values;
+        if callable, skip when callable(x) returns True.
 
-    Example
-    -------
-    >>> @zform_function("quadratic", n_params=2, description="y = a*x^2 + b")
-    ... def quadratic_func(x, a, b):
-    ...     return a * x**2 + b
-    ...
-    >>> @zform_function("weird", init_func=lambda x, y: [1, 0])
-    ... def weird_func(x, a, b):
-    ...     return a*np.sin(x) + b
+    Notes
+    ----------
+    Built-in names: ``linear``, ``power``, ``inverse``, ``root``, ``log_dynamic``,
+    ``exponential``, ``logistic``. Override only if intentional.
     """
+
     def decorator(func):
-        ZFORM_FUNCTIONS[name] = {
+        if init_func and init_func.__code__.co_freevars:
+            msg = (
+                f"init_func for '{name}' uses closure variables: "
+                f"{init_func.__code__.co_freevars}. "
+                "Restoration may fail. Prefer explicit parameters."
+            )
+            ZformRuntimeWarning(msg)
+        # embed init_func
+        if init_func is None:
+            if fixed_params:
+
+                def actual_init(x, y):
+                    return list(fixed_params)
+
+            else:
+                actual_init = _DefaultInit(n_params)
+        else:
+            actual_init = init_func
+
+        entry = {
             "func": func,
             "n_params": n_params,
             "description": description,
             "fixed_params": fixed_params,
+            "bounds": bounds,
+            "init_func": actual_init,
+            "requires_positive_x": requires_positive_x,
         }
 
-        if init_func:
-            INIT_GUESS_FUNCS[name] = init_func
+        if register:
+            ZFORM_FUNCTIONS[name] = entry
         else:
-            def _default_init(x, y):
-                if len(np.shape(x)) == 0:
-                    return [1.0]
-                try:
-                    return [np.std(y) / (np.std(x) + 1e-8), np.mean(y)]
-                except Exception:
-                    return [1.0]
-            INIT_GUESS_FUNCS[name] = _default_init
-
-        if bounds:
-            BOUNDS_REGISTRY[name] = bounds
+            entry["name"] = name
+            LOCAL_ZFORM_FUNCTIONS[name] = entry
+            setattr(func, "__zform_registration__", entry)
 
         return func
 
@@ -94,44 +152,150 @@ def zform_function(
 
 # --- Built-in transformations ---
 
-@zform_function("linear", n_params=2, description="Linear model: a*x + b",
-                init_func=lambda x, y: [
-                    (np.std(y) or 1.0) / (np.std(x) or 1.0),
-                    np.mean(y) - (np.std(y) or 1.0)/(np.std(x) or 1.0) * np.mean(x)
-                ])
-def linear_func(x, a, b):
-    return a * x + b
+
+@zform_function(
+    "linear",
+    n_params=0,
+    description="Identity transformation: x",
+    init_func=lambda x, y: [],
+    bounds=([], []),
+    fixed_params=[],
+    requires_positive_x=False,
+    register=True,
+)
+def linear_func(x):
+    """
+    Identity transformation.
+    Returns: x.
+    """
+    return x
 
 
-@zform_function("power", n_params=2, description="Power model: a*x^b",
-                init_func=lambda x, y: [np.mean(y) / (np.mean(x) or 1.0), 1.0])
-def power_func(x, a, b):
+@zform_function(
+    "power",
+    n_params=1,
+    description="Power-law transformation: x**b",
+    init_func=lambda x, y: [1.0],
+    bounds=([-SQRT_MAX_FLOAT], [SQRT_MAX_FLOAT]),
+    fixed_params=[1.0],
+    requires_positive_x=False,
+    register=True,
+)
+def power_func(x, b):
+    """
+    Power-law transformation.
+    Returns: np.power(x, b).
+    """
     with np.errstate(divide="ignore", invalid="ignore"):
-        return a * np.power(x, b)
+        return np.power(x, b)
 
 
-@zform_function("log_dynamic", n_params=3, description="Dynamic log model: a*log(b*x + c)",
-                init_func=lambda x, y: [
-                    (np.std(y) or 1.0) / (np.std(np.log(np.abs(x) + 1)) or 1.0),
-                    np.mean(y),
-                    np.e
-                ])
-def log_func_dynamic(x, a, b, c):
+@zform_function(
+    "inverse",
+    n_params=1,
+    description="Reciprocal transform: 1 / (x**k)",
+    init_func=lambda x, y: [1.0],
+    bounds=([MIN_POS_FLOAT], [SQRT_MAX_FLOAT]),
+    fixed_params=[1.0],
+    requires_positive_x=False,
+    register=True,
+)
+def inverse_func(x, k):
+    """
+    Reciprocal power transformation.
+    Returns: np.power(x, -abs(k)).
+    """
     with np.errstate(divide="ignore", invalid="ignore"):
-        return a * np.log(b * x + c)
+        return np.power(x, -abs(k))
 
 
-@zform_function("logistic", n_params=3, description="Logistic model: L / (1 + exp(-k*(x - x0)))",
-                init_func=lambda x, y: [
-                    float(np.max(y)),
-                    1.0 / (np.std(x) or 1.0),
-                    float(np.median(x))
-                ])
-def logistic_func(x, L, k, x0):
-    return L / (1 + np.exp(-k * (x - x0)))
+@zform_function(
+    "root",
+    n_params=1,
+    description="Root transform: x ** (1 / k)",
+    init_func=lambda x, y: [2.0],  # start from square root
+    bounds=([MIN_POS_FLOAT], [SQRT_MAX_FLOAT]),
+    fixed_params=[2.0],
+    requires_positive_x=False,
+    register=True,
+)
+def root_func(x, k):
+    """
+    K-th root transformation.
+    Returns: np.power(x, 1.0 / (k or 1.0)).
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.power(x, 1.0 / (k or 1.0))
 
+
+@zform_function(
+    "log_dynamic",
+    n_params=1,
+    description="Logarithmic transformation with variable base: log_base(x)",
+    init_func=lambda x, y: [np.e],  # start from natual log
+    bounds=([MIN_LOG_BASE], [SQRT_MAX_FLOAT]),
+    fixed_params=[np.e],
+    requires_positive_x=True,
+    register=True,
+)
+def log_func_dynamic(x, base):
+    """
+    Logarithmic transformation with variable base.
+    Returns: np.log(x)/np.log(base).
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.log(x) / np.log(base)
+
+
+@zform_function(
+    "exponential",
+    n_params=1,
+    description="Exponential transformation: e^(k * x)",
+    init_func=lambda x, y: [1.0],  # normal start
+    bounds=([MIN_EXP_K], [MAX_EXP_K]),
+    fixed_params=[1.0],
+    requires_positive_x=False,
+    register=True,
+)
+def exponential_func(x, k):
+    """
+    Exponential transformation.
+    Returns: np.exp(np.clip(k * x, MIN_EXP_ARGUMENT, MAX_EXP_ARGUMENT)).
+    """
+    argument = np.clip(k * x, MIN_EXP_ARGUMENT, MAX_EXP_ARGUMENT)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.exp(argument)
+
+
+@zform_function(
+    "logistic",
+    n_params=2,
+    description="Logistic transformation: 1 / (1 + exp(-k*(x - x0)))",
+    init_func=lambda x, y: [
+        1.0 / (np.std(x) or 1.0),  # k
+        float(np.median(x)),  # x0
+    ],
+    bounds=([1e-12, -SQRT_MAX_FLOAT], [1e12, SQRT_MAX_FLOAT]),
+    fixed_params=[1.0, 0.0],
+    requires_positive_x=False,
+    register=True,
+)
+def logistic_func(x, k, x0):
+    """
+    Logistic (sigmoid) transformation.
+    Returns: 1.0 / (1.0 + np.exp(argument)).
+    """
+    argument = np.clip(-k * (x - x0), MIN_EXP_ARGUMENT, MAX_EXP_ARGUMENT)
+    with np.errstate(over="ignore", invalid="ignore"):
+        return 1.0 / (1.0 + np.exp(argument))
+
+
+# --- Register builtin function explicitly ---
+
+BUILTIN_TRANSFORM_NAMES = set(ZFORM_FUNCTIONS.keys())
 
 # --- API helpers ---
+
 
 def get_zform_functions(transformations=None):
     """Return dict of transformation name -> callable."""
@@ -141,7 +305,11 @@ def get_zform_functions(transformations=None):
     for t in transformations:
         if isinstance(t, str):
             if t not in ZFORM_FUNCTIONS:
-                raise KeyError(f"Unknown transformation '{t}' — available: {list(ZFORM_FUNCTIONS.keys())}")
+                msg = (
+                    f"Unknown transformation '{t}' "
+                    f"— available: {list(ZFORM_FUNCTIONS.keys())}"
+                )
+                raise KeyError(msg)
             funcs[t] = ZFORM_FUNCTIONS[t]["func"]
         elif callable(t):
             funcs[getattr(t, "__name__", "custom_func")] = t
@@ -150,14 +318,81 @@ def get_zform_functions(transformations=None):
     return funcs
 
 
-def guess_initial_params(x, y, model_name):
+def guess_initial_params(x, y, transformation_name):
     """Retrieve the model-specific initialization function."""
-    func = INIT_GUESS_FUNCS.get(model_name)
-    if func is None:
-        msg = (f"Unknown model '{model_name}' — no init function registered.\n"
-               "Defaulting to initial guess = 1.0 for all parameters.\n"
-               "This may cause convergence issues.\n"
-               "Please specify an 'init_func' in your custom transformation definition.")
+    entry = ZFORM_FUNCTIONS.get(transformation_name)
+    if entry is None or entry.get("init_func") is None:
+        msg = (
+            f"Unknown model '{transformation_name}' — "
+            "no init function registered.\n"
+            "Defaulting to initial guess = 1.0 for all parameters.\n"
+            "This may cause convergence issues.\n"
+            "Please specify an 'init_func' in your custom "
+            "transformation definition."
+        )
         ZformRuntimeWarning(msg)
         return [1.0]
-    return func(x, y)
+    return entry["init_func"](x, y)
+
+
+# -- Programmatic helper --
+def register_zform_function(
+    *,
+    func,
+    name,
+    n_params=None,
+    description=None,
+    init_func=None,
+    bounds=None,
+    fixed_params=None,
+    register=True,
+    requires_positive_x=False,
+):
+    """
+    Programmatic registration of a zform transformation.
+
+    Equivalent to @zform_function(...) but for dynamic injection.
+
+    Parameters
+    ----------
+    func : callable
+        Transformation function ``f(x, *theta)``.
+    name : str
+        Registry name.
+    n_params : int | None
+        Number of free parameters (0 for parameter-free forms).
+    description : str | None
+        Human-readable description.
+    init_func : callable | None
+        Initializer (x, y) -> list/tuple of starting params; defaults to `fixed_params` if `None`.
+        Lambdas/closures work but may not serialize safely; prefer named, module-level functions
+        for export/import and pull-from-export.
+    bounds : tuple[list|tuple, list|tuple] | None
+        Parameter bounds (lower, upper) for curve fitting.
+    fixed_params : list | tuple | None
+        Canonical parameter set for `strategy="fixed"`.
+    register : bool
+        If True, immediately register in the global registry; otherwise only define locally.
+    requires_positive_x : bool | callable
+        If True, skip when x has nonpositive values;
+        if callable, skip when callable(x) returns True.
+
+    Notes
+    ----------
+    Built-in names: ``linear``, ``power``, ``inverse``, ``root``, ``log_dynamic``,
+    ``exponential``, ``logistic``. Override only if intentional.
+    """
+
+    # reuse the decorator
+    decorator = zform_function(
+        name=name,
+        n_params=n_params,
+        description=description,
+        init_func=init_func,
+        bounds=bounds,
+        fixed_params=fixed_params,
+        requires_positive_x=requires_positive_x,
+        register=True,
+    )
+    decorator(func)
+    return func
